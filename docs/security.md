@@ -111,9 +111,17 @@ control.
 
 **Mitigation**:
 
-- Every pull request's dependency changes are checked against the GitHub Advisory Database (dependency review) before merge
-- The locked runtime closure is audited against known vulnerabilities weekly and on every push to `main` (`pip-audit` in CI), so a disclosure against a version already pinned is caught between releases
-- Every version is pinned in `uv.lock`, and CI installs from the lock, so a build cannot pick up an unreviewed release
+- The versions you run are the ones your installer resolves from the ranges CATS declares in
+  `pyproject.toml`. CATS is a library and pins no transitive dependency for you, so a disclosure
+  against a dependency is yours to pick up by reinstalling; keep your own environment audited.
+- Every pull request's dependency changes are checked against the GitHub Advisory Database
+  (dependency review) before merge, so a known-vulnerable version cannot enter `uv.lock` unseen
+- Every version is pinned in `uv.lock`, and CI installs from the lock, so the build that produces
+  a release cannot pick up an unreviewed dependency release. The lock is in no published
+  artifact: it protects the release build, not your installation.
+- Dependabot watches the lock for disclosures against pinned versions and opens one grouped
+  pull request per batch; these keep the maintainers' environment clean and do not change what
+  you install
 - Review dependency updates
 
 ### Compute Environment Compromise
