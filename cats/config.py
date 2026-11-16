@@ -1411,7 +1411,7 @@ def generate_schema(output_dir: Path | None = None) -> Path:
     output_path = target_dir / ".schema.json"
     schema: dict[str, object] = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://awslabs.github.io/cats/schema/v{__version__}.json",
+        "$id": f"https://aws.github.io/cats/schema/v{__version__}.json",
         **CatsConfig.model_json_schema(),
     }
     with output_path.open("w", encoding="utf-8") as f:

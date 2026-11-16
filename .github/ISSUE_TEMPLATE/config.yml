@@ -15,8 +15,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security issue
-    url: https://github.com/awslabs/cats/blob/main/SECURITY.md
+    url: https://github.com/aws/cats/blob/main/SECURITY.md
     about: Potential security issues go to AWS Security, not to a public issue. SECURITY.md has the process.
   - name: Documentation
-    url: https://awslabs.github.io/cats/
+    url: https://aws.github.io/cats/
     about: Getting started, concepts, guides and troubleshooting.

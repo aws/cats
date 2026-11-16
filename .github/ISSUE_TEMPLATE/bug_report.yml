@@ -19,7 +19,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not report security issues here; follow [SECURITY.md](https://github.com/awslabs/cats/blob/main/SECURITY.md).
+        Do not report security issues here; follow [SECURITY.md](https://github.com/aws/cats/blob/main/SECURITY.md).
         Remove account IDs, role ARNs, hostnames and credentials from anything you paste.
   - type: input
     id: version

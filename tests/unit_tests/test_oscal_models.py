@@ -34,6 +34,7 @@ from cats.oscal_models import (
     SelectControlById,
     State,
     SubjectReference,
+    stable_uuid,
 )
 
 
@@ -291,3 +292,15 @@ def test_observation_remarks_renders_when_set() -> None:
     # assert
     expected_remarks = "SC-7 AC-3"
     assert dumped["remarks"] == expected_remarks
+
+
+def test_stable_uuid_keeps_its_1_0_0_value() -> None:
+    """The uuid5 namespace seed is fixed at its 1.0.0 value; changing it renumbers every document."""
+    # arrange
+    expected = "a78abc5f-628f-5851-8955-c67b58ccd808"
+
+    # act
+    actual = stable_uuid("observation", "tests/test_network.py::test_prod_cannot_reach_dev")
+
+    # assert
+    assert expected == actual
