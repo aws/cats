@@ -15,7 +15,7 @@
 """mkdocs hook: publish the cats.yaml JSON schema at the URL its `$id` names.
 
 `cats validate` writes `.schema.json` with `$id` set to
-`https://awslabs.github.io/cats/schema/v{version}.json`. An `$id` is a resolvable
+`https://aws.github.io/cats/schema/v{version}.json`. An `$id` is a resolvable
 identifier by convention, so the docs build writes the same document to
 `site/schema/v{version}.json`, plus `site/schema/latest.json` for editors that want
 to track the current release rather than pin one.

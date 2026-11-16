@@ -161,7 +161,7 @@ so a report directory inside the checkout that is not ignored does not dirty eve
 neither does a change elsewhere in a monorepo.
 
 `run.test_packs` is the suite's own statement of which release it is, as its
-`pytest_cats_test_pack` hook declared it (see [Usage attribution](https://github.com/awslabs/cats/blob/main/README.md#usage-attribution)).
+`pytest_cats_test_pack` hook declared it (see [Usage attribution](https://github.com/aws/cats/blob/main/README.md#usage-attribution)).
 `git` says whether that statement matches what ran. When the tests are installed rather than
 checked out (`pytest --pyargs acme_controls`), `git` describes the project directory, not the
 package, and the pack version is the provenance field: the installed wheel's `RECORD` file

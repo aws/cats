@@ -13,10 +13,10 @@
 # limitations under the License.
 
 site_name: "CATS: Control Acceptance Testing Suite"
-site_url: https://awslabs.github.io/cats/
+site_url: https://aws.github.io/cats/
 use_directory_urls: false
-repo_url: https://github.com/awslabs/cats
-repo_name: "awslabs/cats"
+repo_url: https://github.com/aws/cats
+repo_name: "aws/cats"
 # No edit_uri: the repository does not take contributions through GitHub edits.
 edit_uri: ""
 theme:

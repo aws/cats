@@ -65,7 +65,10 @@ if TYPE_CHECKING:
     from mypy_boto3_securityhub.type_defs import AwsSecurityFindingTypeDef, BatchImportFindingsResponseTypeDef, ComplianceTypeDef, ResourceTypeDef
 
 # Namespace for deterministic finding ids: uuid5(namespace, nodeid). Distinct from the
-# OSCAL namespace so the two writers' identifiers never look interchangeable.
+# OSCAL namespace so the two writers' identifiers never look interchangeable. The seed string
+# is an opaque namespace, not a link, and must never change: every finding id changes with
+# it, and Security Hub sees new findings instead of updates to existing ones. It still names
+# awslabs, the org the project lived in at 1.0.0, on purpose.
 CATS_SECURITYHUB_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/awslabs/cats/securityhub")
 
 ASFF_SCHEMA_VERSION = "2018-10-08"

@@ -292,7 +292,7 @@ Enable editor autocomplete by pointing the YAML language server at the schema, e
 the published one for your installed release or a local copy:
 
 ```yaml
-# yaml-language-server: $schema=https://awslabs.github.io/cats/schema/latest.json
+# yaml-language-server: $schema=https://aws.github.io/cats/schema/latest.json
 ```
 
 `cats validate` writes the same schema next to your config as `.schema.json`, for
@@ -303,7 +303,7 @@ editors without network access or a pinned check-in:
 ```
 
 The published schema for a specific release is at
-`https://awslabs.github.io/cats/schema/v{version}.json`, which is also the `$id` inside
+`https://aws.github.io/cats/schema/v{version}.json`, which is also the `$id` inside
 every generated `.schema.json`.
 
 ## Environment Variables

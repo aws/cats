@@ -39,7 +39,7 @@ def test_schema_written_to_output_dir(tmp_path: Path) -> None:
 
 def test_schema_id_carries_package_version(tmp_path: Path) -> None:
     # arrange
-    expected_id = f"https://awslabs.github.io/cats/schema/v{__version__}.json"
+    expected_id = f"https://aws.github.io/cats/schema/v{__version__}.json"
 
     # act
     schema = read_schema(tmp_path)

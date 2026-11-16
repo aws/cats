@@ -228,5 +228,5 @@ The flag is equivalent to granting the test role `ssm:SendCommand` on the run-co
 If you discover a potential security issue in CATS, notify AWS/Amazon Security
 via the [vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/)
 or email [aws-security@amazon.com](mailto:aws-security@amazon.com) — see
-[SECURITY.md](https://github.com/awslabs/cats/blob/main/SECURITY.md). Please do
+[SECURITY.md](https://github.com/aws/cats/blob/main/SECURITY.md). Please do
 *not* create a public GitHub issue.

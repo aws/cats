@@ -14,4 +14,4 @@
 
 # The main branch ruleset requires a code-owner review on every pull request.
 # This file is what makes that requirement bind to someone.
-*  @awslabs/cats-team
+*  @aws/cats-team

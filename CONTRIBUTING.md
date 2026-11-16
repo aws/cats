@@ -5,7 +5,7 @@ in the future, CATS is released under the [Apache-2.0 license](LICENSE) and any
 code submitted will be released under that license.
 
 Bug reports are welcome: open a
-[GitHub issue](https://github.com/awslabs/cats/issues/new/choose) using the bug
+[GitHub issue](https://github.com/aws/cats/issues/new/choose) using the bug
 report template, with account IDs, role ARNs, hostnames and credentials removed
 from anything you paste.
 

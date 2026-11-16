@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/aws-cats)](https://pypi.org/project/aws-cats/)
 [![Python](https://img.shields.io/pypi/pyversions/aws-cats)](https://pypi.org/project/aws-cats/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/awslabs/cats/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/aws/cats/blob/main/LICENSE)
 
 CATS proves your AWS security controls and applications work by testing them, not
 just by checking configuration. Network paths, data perimeters, SCP and IAM enforcement,
@@ -30,7 +30,7 @@ def test_prod_cannot_reach_dev(
 CATS deploys ephemeral test infrastructure into each account under test:
 IAM roles, plus EC2 listeners and Lambda probes where you define network
 targets. Each account is exposed as a typed pytest fixture, and CATS reports
-what the tests proved, including [OSCAL assessment results](https://github.com/awslabs/cats/blob/main/docs/guides/reporting.md)
+what the tests proved, including [OSCAL assessment results](https://github.com/aws/cats/blob/main/docs/guides/reporting.md)
 for compliance evidence. AI agents can interact with the deployed
 infrastructure through MCP or the `cats run` CLI.
 
@@ -49,8 +49,8 @@ cycle.
 **Security note:** CATS runs with high privilege across many
 accounts using hub-and-spoke IAM trust. Treat its parent account, its deploy
 role, and its configuration as production security infrastructure. See the
-[identity model](https://github.com/awslabs/cats/blob/main/docs/concepts/identity-model.md)
-and [security model](https://github.com/awslabs/cats/blob/main/docs/security.md).
+[identity model](https://github.com/aws/cats/blob/main/docs/concepts/identity-model.md)
+and [security model](https://github.com/aws/cats/blob/main/docs/security.md).
 
 ## Use CATS with AI agents
 
@@ -63,8 +63,8 @@ before writing repeatable pytest tests. Generate the supporting agent
 documentation with `cats prompts --all`; start initial configuration with
 `cats prompts setup`.
 
-See [Agentic](https://github.com/awslabs/cats/blob/main/docs/concepts/agentic.md)
-and the [MCP reference](https://github.com/awslabs/cats/blob/main/docs/api-reference/MCP.md).
+See [Agentic](https://github.com/aws/cats/blob/main/docs/concepts/agentic.md)
+and the [MCP reference](https://github.com/aws/cats/blob/main/docs/api-reference/MCP.md).
 
 ## Install
 
@@ -123,23 +123,23 @@ Every account in `cats.yaml` becomes a `<name>_account` fixture. `cats
 generate-types` gives the fixtures real types for IDE autocomplete and mypy
 (install `aws-cats[types]` for the typed boto3 clients behind `.client(...)`).
 The full walkthrough is in the
-[quickstart](https://github.com/awslabs/cats/blob/main/docs/getting-started/quickstart.md).
+[quickstart](https://github.com/aws/cats/blob/main/docs/getting-started/quickstart.md).
 
 ## Documentation
 
-The rendered documentation is at [awslabs.github.io/cats](https://awslabs.github.io/cats/);
+The rendered documentation is at [aws.github.io/cats](https://aws.github.io/cats/);
 the same pages are in `docs/` as Markdown, where the tabs, admonitions and API reference
 blocks render as plain text.
 
 | | |
 |---|---|
-| [Getting started](https://github.com/awslabs/cats/blob/main/docs/getting-started/quickstart.md) | Installation, first test, [multi-account setup](https://github.com/awslabs/cats/blob/main/docs/getting-started/multi-account.md) |
-| [Concepts](https://github.com/awslabs/cats/blob/main/docs/concepts/how-it-works.md) | [How it works](https://github.com/awslabs/cats/blob/main/docs/concepts/how-it-works.md), [identity model](https://github.com/awslabs/cats/blob/main/docs/concepts/identity-model.md), [network testing](https://github.com/awslabs/cats/blob/main/docs/concepts/network-testing.md), [versioning and compatibility](https://github.com/awslabs/cats/blob/main/docs/concepts/versioning.md) |
-| [Guides](https://github.com/awslabs/cats/blob/main/docs/guides/writing-tests.md) | [Writing tests](https://github.com/awslabs/cats/blob/main/docs/guides/writing-tests.md), [configuration](https://github.com/awslabs/cats/blob/main/docs/guides/configuration.md), [infrastructure](https://github.com/awslabs/cats/blob/main/docs/guides/infrastructure.md), [reporting and OSCAL](https://github.com/awslabs/cats/blob/main/docs/guides/reporting.md), [standards registry](https://github.com/awslabs/cats/blob/main/docs/guides/standards-registry.md) |
-| [Security](https://github.com/awslabs/cats/blob/main/docs/security.md) | Threat model, listener authentication, least privilege |
-| [Troubleshooting](https://github.com/awslabs/cats/blob/main/docs/troubleshooting.md) | When deploys or tests misbehave |
+| [Getting started](https://github.com/aws/cats/blob/main/docs/getting-started/quickstart.md) | Installation, first test, [multi-account setup](https://github.com/aws/cats/blob/main/docs/getting-started/multi-account.md) |
+| [Concepts](https://github.com/aws/cats/blob/main/docs/concepts/how-it-works.md) | [How it works](https://github.com/aws/cats/blob/main/docs/concepts/how-it-works.md), [identity model](https://github.com/aws/cats/blob/main/docs/concepts/identity-model.md), [network testing](https://github.com/aws/cats/blob/main/docs/concepts/network-testing.md), [versioning and compatibility](https://github.com/aws/cats/blob/main/docs/concepts/versioning.md) |
+| [Guides](https://github.com/aws/cats/blob/main/docs/guides/writing-tests.md) | [Writing tests](https://github.com/aws/cats/blob/main/docs/guides/writing-tests.md), [configuration](https://github.com/aws/cats/blob/main/docs/guides/configuration.md), [infrastructure](https://github.com/aws/cats/blob/main/docs/guides/infrastructure.md), [reporting and OSCAL](https://github.com/aws/cats/blob/main/docs/guides/reporting.md), [standards registry](https://github.com/aws/cats/blob/main/docs/guides/standards-registry.md) |
+| [Security](https://github.com/aws/cats/blob/main/docs/security.md) | Threat model, listener authentication, least privilege |
+| [Troubleshooting](https://github.com/aws/cats/blob/main/docs/troubleshooting.md) | When deploys or tests misbehave |
 
-Run `cats --help` for the complete command reference, or see the [CLI reference](https://awslabs.github.io/cats/api-reference/CLI.html) (commands, exit codes, streams).
+Run `cats --help` for the complete command reference, or see the [CLI reference](https://aws.github.io/cats/api-reference/CLI.html) (commands, exit codes, streams).
 
 ## Developing
 
@@ -156,9 +156,9 @@ separately: the integration suite's `conftest.py` declares itself a test pack, a
 run that collects both loads it too late for that, which CATS reports as a warning.
 
 CATS is published as open source but is
-[not currently accepting contributions](https://github.com/awslabs/cats/blob/main/CONTRIBUTING.md).
-Bug reports are welcome as [GitHub issues](https://github.com/awslabs/cats/issues/new/choose);
-potential security issues go through [SECURITY.md](https://github.com/awslabs/cats/blob/main/SECURITY.md)
+[not currently accepting contributions](https://github.com/aws/cats/blob/main/CONTRIBUTING.md).
+Bug reports are welcome as [GitHub issues](https://github.com/aws/cats/issues/new/choose);
+potential security issues go through [SECURITY.md](https://github.com/aws/cats/blob/main/SECURITY.md)
 instead.
 
 ## Usage attribution
@@ -173,10 +173,10 @@ suite declares. Nothing else is added, collected, or transmitted.
 ## Security
 
 Report potential security issues according to
-[SECURITY.md](https://github.com/awslabs/cats/blob/main/SECURITY.md), not as
+[SECURITY.md](https://github.com/aws/cats/blob/main/SECURITY.md), not as
 public GitHub issues.
 
 ## License
 
-Apache-2.0. See [LICENSE](https://github.com/awslabs/cats/blob/main/LICENSE)
-and [NOTICE](https://github.com/awslabs/cats/blob/main/NOTICE).
+Apache-2.0. See [LICENSE](https://github.com/aws/cats/blob/main/LICENSE)
+and [NOTICE](https://github.com/aws/cats/blob/main/NOTICE).

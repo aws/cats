@@ -202,13 +202,13 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/awslabs/cats"
-Documentation = "https://awslabs.github.io/cats/"
-Repository = "https://github.com/awslabs/cats"
-Issues = "https://github.com/awslabs/cats/issues"
-Changelog = "https://github.com/awslabs/cats/blob/main/CHANGELOG.md"
-Versioning = "https://awslabs.github.io/cats/concepts/versioning.html"
-Security = "https://github.com/awslabs/cats/blob/main/SECURITY.md"
+Homepage = "https://github.com/aws/cats"
+Documentation = "https://aws.github.io/cats/"
+Repository = "https://github.com/aws/cats"
+Issues = "https://github.com/aws/cats/issues"
+Changelog = "https://github.com/aws/cats/blob/main/CHANGELOG.md"
+Versioning = "https://aws.github.io/cats/concepts/versioning.html"
+Security = "https://github.com/aws/cats/blob/main/SECURITY.md"
 
 [project.optional-dependencies]
 # `cats mcp` (the MCP server). An HTTP/auth/crypto stack (~60 packages) that most

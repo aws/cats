@@ -100,7 +100,7 @@ Preconditions that apply to every tool except `cats_list_accounts`,
 Schemas:
 
 - cats.yaml schema: the JSON Schema `cats validate` writes beside the config as
-  `.schema.json` (also published at https://awslabs.github.io/cats/schema/latest.json)
+  `.schema.json` (also published at https://aws.github.io/cats/schema/latest.json)
   is the contract: fields, types, defaults and descriptions. `cats_validate`
   confirms an edit. The Pydantic models that implement it are in the installed
   package at `{_CATS_CONFIG_PATH}`; read that file for validator reasoning when a

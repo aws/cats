@@ -34,6 +34,9 @@ OSCAL_VERSION = "1.2.1"
 # Namespace for deterministic (uuid5) observation/inventory/finding UUIDs, so two
 # runs over the same tests produce diffable documents. Document and result UUIDs
 # stay uuid4: OSCAL expects a fresh instance identity per run.
+# The seed string is an opaque namespace, not a link, and must never change: every stable
+# UUID changes with it, so documents from before and after stop being diffable. It still
+# names awslabs, the org the project lived in at 1.0.0, on purpose.
 _CATS_OSCAL_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/awslabs/cats/oscal")
 
 
