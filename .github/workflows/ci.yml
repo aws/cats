@@ -18,10 +18,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Weekly audit of the lock. Dependency review checks what a pull request changes;
-    # this catches a vulnerability disclosed against a version already pinned.
-    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -57,27 +53,14 @@ jobs:
         with:
           persist-credentials: false
       # Reads uv.lock: the review on the first Dependabot pull request listed every changed
-      # package in the lock, so no dependency-submission step is needed.
+      # package in the lock, so no dependency-submission step is needed. This is the one
+      # dependency gate: it checks what a change lets INTO the lock, which is what the release
+      # build installs. A disclosure against a version already in the lock is Dependabot's job
+      # (.github/dependabot.yml), and adopters are not exposed by it: the lock ships in no
+      # artifact, and they resolve from the ranges in pyproject.toml.
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: low
-
-  audit:
-    name: Audit locked dependencies
-    if: github.event_name == 'schedule' || github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: ${{ env.UV_VERSION }}
-          python-version: "3.14"
-      # The runtime closure with every extra, exactly as the lock pins it; the dev group is
-      # not shipped to adopters and is covered by dependency review on the change that adds it.
-      - run: uv export --frozen --all-extras --no-dev --no-emit-project --format requirements-txt > requirements-audit.txt
-      - run: uvx pip-audit==2.10.1 --requirement requirements-audit.txt --strict --progress-spinner off
 
   test:
     name: Unit tests
