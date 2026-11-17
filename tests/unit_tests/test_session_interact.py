@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import boto3
 import botocore
 import pytest
+from botocore.config import Config
 from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, NoCredentialsError
 from moto import mock_aws
@@ -130,6 +131,41 @@ def test_session_identifies_cats_in_the_user_agent(assumable_role: None, empty_r
 
     # assert
     assert expected == cats_tokens(user_agent)
+
+
+def test_session_clients_retry_adaptively(assumable_role: None) -> None:
+    """The SSM, S3 and Lambda clients behind every probe carry the retry policy.
+
+    Read from a built client, not from the session: botocore resolves the default client config
+    when it builds the client, and normalizes ``max_attempts`` to ``total_max_attempts`` (the
+    first try plus the retries) there, which is the form the retry handler reads.
+    """
+    # arrange
+    session = get_test_session(ROLE_ARN, ACCOUNT_NAME, REGION)
+
+    # act
+    # botocore sets Config options as instance attributes from OPTION_DEFAULTS, so the stubs do not
+    # declare them; `getattr` is how they are read.
+    retries: dict[str, object] = getattr(session.client("ssm").meta.config, "retries")  # noqa: B009
+
+    # assert
+    expected = {"total_max_attempts": 11, "mode": "adaptive"}
+    assert expected == retries
+
+
+def test_caller_client_config_keeps_the_adaptive_retries(assumable_role: None) -> None:
+    """A caller's own ``config=`` composes with the default per top-level option, so an unrelated option keeps the retries."""
+    # arrange
+    session = get_test_session(ROLE_ARN, ACCOUNT_NAME, REGION)
+
+    # act
+    config = session.client("s3", config=Config(connect_timeout=3)).meta.config
+    connect_timeout: int = getattr(config, "connect_timeout")  # noqa: B009
+    retries: dict[str, object] = getattr(config, "retries")  # noqa: B009
+
+    # assert
+    expected = (3, {"total_max_attempts": 11, "mode": "adaptive"})
+    assert expected == (connect_timeout, retries)
 
 
 def test_test_role_session_sends_the_pack_token_on_the_wire(assumable_role: None, registered_pack: None) -> None:

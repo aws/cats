@@ -50,7 +50,7 @@ from uuid import NAMESPACE_URL, uuid5
 from boto3.session import Session
 from botocore.exceptions import BotoCoreError, ClientError
 
-from cats.cfn.session import BOTO_RETRY_CONFIG
+from cats.boto_config import BOTO_RETRY_CONFIG
 from cats.config import SecurityHubSeverity, Settings
 from cats.exceptions import CatsError, CatsInfrastructureError
 from cats.hookspecs import StandardMetadata

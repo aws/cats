@@ -73,7 +73,8 @@ from typing import TYPE_CHECKING, Literal
 
 from botocore.exceptions import ClientError
 
-from cats.cfn.session import BOTO_RETRY_CONFIG, DEPLOY_ROLE_SESSION_NAME
+from cats.boto_config import BOTO_RETRY_CONFIG
+from cats.cfn.session import DEPLOY_ROLE_SESSION_NAME
 from cats.constants import LISTENER_FAILED_MARKER, LISTENER_READY_MARKER, PER_TARGET_OUTPUT_KEYS
 from cats.user_agent import attributed_session
 

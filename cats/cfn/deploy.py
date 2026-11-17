@@ -25,10 +25,10 @@ import boto3
 import typer
 from botocore.exceptions import ClientError
 
+from cats.boto_config import BOTO_RETRY_CONFIG
 from cats.cfn.events import StackEvent, StackPoller, is_success
 from cats.cfn.readiness import RoleReadiness, StackReadiness, lambdas_from_outputs, listeners_from_outputs, test_role_from_outputs
 from cats.cfn.retry import retry_on_throttle
-from cats.cfn.session import BOTO_RETRY_CONFIG
 from cats.version import __version__
 
 if TYPE_CHECKING:

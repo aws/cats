@@ -37,6 +37,7 @@ import pytest
 from cats.report_run import ResultCounts
 from cats.report_writers.securityhub import SecurityHubWriter, finding_id
 from cats.reporting import ReportEntry
+from cats.user_agent import attributed_session
 from tests.integration.constants import ACCOUNT_ID, REGION, skip_wrong_account, stack_prefix
 from tests.integration.reporting_helpers import NESTED_TEST_FILE, junit_properties, run_nested_cats_session
 from tests.integration.securityhub_helpers import archive_synthetic_findings, manifest_finishing_now, synthetic_entry, wait_for_finding
@@ -56,8 +57,8 @@ NODEID_NESTED = f"{NESTED_TEST_FILE}::test_control_that_fails"
 
 
 def _securityhub() -> "SecurityHubClient":
-    """The deploy identity's client, used to read findings back and to archive them."""
-    client: SecurityHubClient = boto3.Session(region_name=REGION).client("securityhub")
+    """The deploy identity's client, used to read findings back and to archive them; attributed, so it retries like CATS's own."""
+    client: SecurityHubClient = attributed_session(region_name=REGION).client("securityhub")
     return client
 
 

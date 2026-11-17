@@ -25,6 +25,7 @@ from cats.config import SecurityHubSeverity
 from cats.report_run import RunManifest
 from cats.report_writers.securityhub import FindingContext, asff_timestamp, build_account_findings
 from cats.reporting import ReportEntry
+from cats.user_agent import attributed_session
 from cats.version import __version__
 from tests.utils import make_run_manifest
 
@@ -90,7 +91,7 @@ def wait_for_finding(client: "SecurityHubClient", finding_id: str, run_id: str) 
 def assume_role(session: Session, role_arn: str, region: str) -> Session:
     """A session in the role, chained from ``session``. Credentials stay inside the process."""
     credentials = session.client("sts").assume_role(RoleArn=role_arn, RoleSessionName="cats-integ-securityhub")["Credentials"]
-    return Session(
+    return attributed_session(
         aws_access_key_id=credentials["AccessKeyId"],
         aws_secret_access_key=credentials["SecretAccessKey"],
         aws_session_token=credentials["SessionToken"],

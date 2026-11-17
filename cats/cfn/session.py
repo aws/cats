@@ -18,7 +18,6 @@ import logging
 from functools import cache
 
 import boto3
-from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from cats.config import Settings
@@ -31,8 +30,6 @@ logger = logging.getLogger(__name__)
 # readiness gate probes (cats/cfn/readiness.py). Test runs use their own (cats/resources/session_interact.py),
 # so CloudTrail tells a deploy's calls from a test's.
 DEPLOY_ROLE_SESSION_NAME = "cats-infra"
-
-BOTO_RETRY_CONFIG = Config(retries={"max_attempts": 10, "mode": "adaptive"})
 
 
 @cache
