@@ -56,6 +56,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
       a valid one would let any un-mocked boto3 path reach a real account.
     - Fake credentials + AWS_EC2_METADATA_DISABLED keep un-mocked paths off the network.
     - CATS_CONFIG from the shell leaks a real config into isolated tests.
+    - AWS_REGION is the config's Region fallback, so a shell that sets it fills aws_region
+      in the tests that assert it is unset.
     - COLUMNS changes Rich wrapping; consoles built at import time also captured it, so
       their width is forced instead, making exact-output assertions terminal-independent.
 
@@ -67,6 +69,7 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     import cats.cli.infra
 
     monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("CATS_CONFIG", raising=False)
     monkeypatch.delenv("COLUMNS", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
