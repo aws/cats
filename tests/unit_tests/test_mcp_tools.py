@@ -133,10 +133,25 @@ def test_tcp_call_returns_result_reason_and_null_http_status(mock_get_account: M
     assert result == expected
 
 
-def test_udp_call_returns_result_reason_and_correlation_id(mock_get_account: MagicMock) -> None:
+def test_udp_call_returns_result_reason_correlation_id_and_receipt_token_carried(mock_get_account: MagicMock) -> None:
     # arrange
     mock_get_account.return_value.priv.udp_call.return_value = CatsNetworkResult(response=CatsNetworkResponse.SENT, correlation_id="abc-123")
-    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123"}
+    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123", "receipt_token_carried": True}
+
+    # act
+    result = udp_call(account="accA", target="priv", host="10.0.1.5", port=5000)
+
+    # assert
+    assert result == expected
+
+
+def test_udp_call_returns_receipt_token_carried_false_when_the_datagram_carried_no_token(mock_get_account: MagicMock) -> None:
+    """The MCP client never sees the server's WARNING, so the result itself must say the listener will drop this datagram."""
+    # arrange
+    mock_get_account.return_value.priv.udp_call.return_value = CatsNetworkResult(
+        response=CatsNetworkResponse.SENT, correlation_id="abc-123", _receipt_token_carried=False
+    )
+    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123", "receipt_token_carried": False}
 
     # act
     result = udp_call(account="accA", target="priv", host="10.0.1.5", port=5000)
@@ -186,7 +201,7 @@ def test_udp_call_with_receiving_account_prepares_the_receiver_before_sending(
 
     # assert
     expected = (
-        {"result": "SENT", "reason": None, "correlation_id": "abc-123"},
+        {"result": "SENT", "reason": None, "correlation_id": "abc-123", "receipt_token_carried": True},
         [call(Path("other/cats.yaml"), "accB", "ip-10-0-2-9.ec2.internal")],
         ["prepare", "send"],
     )

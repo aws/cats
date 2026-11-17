@@ -223,7 +223,7 @@ along as diagnostics that print on failure but never take part in equality.
 | `DNS_FAILURE` | Name did not resolve; no packet was sent | The *resolver* acted (DNS Firewall): assert it as such, not as `TIMEOUT` |
 | `TLS_FAILURE` | TCP connected, TLS handshake failed (`https_call` only) | TLS inspection with an untrusted CA, or the wrong kind of listener |
 | `FAILURE` | The path could not be proven open or blocked: a connect that got no HTTP reply (hung backend), or an unclassified errno in `result.reason` | Never expected: investigate |
-| `SENT` | UDP datagram left the host | Prove arrival with `receive_s3` |
+| `SENT` | UDP datagram left the host | Prove arrival with `receive_s3`; address the listener by `ec2_dns_name`, or the datagram carries no receipt token and `receive_s3` refuses it |
 
 A negative (isolation) test needs a listener known to be ready at the target and
 an allowed-path positive control in the same run; otherwise a broken listener

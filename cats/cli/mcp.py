@@ -323,23 +323,33 @@ def udp_call(
     port: int,
     receiving_account: ReceivingAccountArg = None,
     config_path: ConfigPathArg = None,
-) -> dict[str, str | None]:
+) -> dict[str, str | bool | None]:
     """UDP send from ACCOUNT's TARGET to HOST:PORT.
 
-    Returns {"result": ..., "reason": ..., "correlation_id": ...}. `result` is SENT (the
-    datagram left the host; pass `correlation_id` to cats_receive_s3 on the RECEIVING
-    account), DNS_FAILURE (name did not resolve; nothing was sent), or FAILURE
+    Returns {"result": ..., "reason": ..., "correlation_id": ..., "receipt_token_carried": ...}.
+    `result` is SENT (the datagram left the host; pass `correlation_id` to cats_receive_s3 on
+    the RECEIVING account), DNS_FAILURE (name did not resolve; nothing was sent), or FAILURE
     (unclassified; errno in `reason`). REFUSED and TIMEOUT cannot occur for UDP: the
     sender learns nothing after the datagram leaves. `correlation_id` is always present.
 
+    `receipt_token_carried` is true when the datagram carried the receiving account's receipt
+    token. When false, no token was registered for HOST, the datagram was sent without one,
+    and a CATS listener drops it, so a `received: false` from cats_receive_s3 would be CATS
+    discarding its own datagram, not a control blocking it. Do not call cats_receive_s3 for
+    it. The key matters on SENT; on DNS_FAILURE and FAILURE nothing was sent.
+
     When HOST is a CATS listener, pass `receiving_account` (the account it belongs to) so
-    the datagram carries that account's receipt token; a bare datagram is dropped and
-    cats_receive_s3 would report false for something CATS itself discarded.
+    the datagram carries that account's receipt token.
     """
     if receiving_account is not None:
         prepare_udp_receiver(_config_file(config_path), receiving_account, host)
     result = getattr(get_account(_config_file(config_path), account), target).udp_call(host, port)
-    return {"result": result.value, "reason": result.reason, "correlation_id": result.correlation_id}
+    return {
+        "result": result.value,
+        "reason": result.reason,
+        "correlation_id": result.correlation_id,
+        "receipt_token_carried": result._receipt_token_carried,
+    }
 
 
 @mcp.tool(name="cats_receive_s3", annotations=_READS_CATS_STATE)

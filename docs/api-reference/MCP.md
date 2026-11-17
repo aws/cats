@@ -14,7 +14,7 @@ the human wiring it up.
 | `cats_account_info` | `account-info` | `name`, `account_id`, `tags`, `deployed_version`, `targets` | read-only |
 | `cats_http_call` | `http-call` | `result`, `reason`, `http_status` | read-only; sends traffic to the host you name |
 | `cats_tcp_call` | `tcp-call` | `result`, `reason`, `http_status` (always `null`) | read-only; sends traffic to the host you name |
-| `cats_udp_call` | `udp-call` | `result`, `reason`, `correlation_id` | writes a receipt to S3 when delivered |
+| `cats_udp_call` | `udp-call` | `result`, `reason`, `correlation_id`, `receipt_token_carried` | writes a receipt to S3 when delivered |
 | `cats_receive_s3` | `receive-s3` | `received` | read-only |
 | `cats_shell` | `shell` | `stdout`, `stderr`, `exit_code`, `duration_ms`, `stdout_truncated`, `stderr_truncated` | destructive: arbitrary commands on a listener; needs `allow_shell: true` at deploy |
 | `cats_write_profile` | `write-profile` | `profile_name`, `profile_file`, `role_arn`, `parent` | destructive: rewrites the user's `~/.aws/config` (the only file it writes; the CLI's `--profile-file` has no MCP equivalent) |
