@@ -118,6 +118,27 @@ def test_can_list_buckets(prod_account: AccountUnderTest) -> None:
 
 ### Prove an API Call is Denied
 
+A denial test proves an SCP only when the role's own policy allows the action. Through
+`readonly`, the role's own policy does not allow the action, so the call is denied with or without
+an SCP, and the test passes either way. Give the test a role that allows the action:
+
+```yaml
+global_account_settings:
+  additional_roles:
+    scp_probe:
+      inline_policies:
+        allow-delete-bucket:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: s3:DeleteBucket
+              Resource: arn:aws:s3:::no-such-bucket-scp-probe
+```
+
+The role is deployed to every account under test, so its policy allows the action on the one
+resource the test names and nothing else; the SCP under test must cover that same ARN. Even
+without the SCP, the role can do nothing.
+
 ```python
 import pytest
 from botocore.exceptions import ClientError
@@ -125,11 +146,17 @@ from botocore.exceptions import ClientError
 
 def test_cannot_delete_bucket(prod_account: AccountUnderTest) -> None:
     """Verify SCP blocks bucket deletion."""
-    s3 = prod_account.role.readonly.client("s3")
+    s3 = prod_account.role.scp_probe.client("s3")
 
-    with pytest.raises(ClientError, match="AccessDenied"):
-        s3.delete_bucket(Bucket="critical-bucket")
+    with pytest.raises(ClientError, match="explicit deny in a service control policy"):
+        s3.delete_bucket(Bucket="no-such-bucket-scp-probe")
 ```
+
+Match the SCP's explicit deny, not the bare `AccessDenied` code, which an implicit deny also
+returns. Point the call at a name the SCP covers that does not exist, so a missing SCP fails the
+test instead of deleting something. Run it once against the real SCP to confirm the service returns
+the SCP message for a missing resource: S3 may answer `NoSuchBucket` instead, and bucket names are
+global, so the name can belong to another account.
 
 ### Prove a Resource Exists
 

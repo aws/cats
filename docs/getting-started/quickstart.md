@@ -122,5 +122,8 @@ def test_readonly_cannot_stop_logging(myaccount_account: AccountUnderTest) -> No
         cloudtrail.stop_logging(Name="my-trail")
 ```
 
-The same shape proves an SCP: use `myaccount_account.session` (the default test role) for the client and the
-denial comes from the organization policy instead.
+An SCP test needs two changes to that shape. Call through a role whose own policy allows the action,
+and match `explicit deny in a service control policy` instead of the bare `AccessDenied`, which an
+implicit deny also returns. Through a role that lacks the action, the call is denied with or without
+the SCP, and the test passes either way. [Writing Tests](../guides/writing-tests.md#prove-an-api-call-is-denied)
+has the full example.
