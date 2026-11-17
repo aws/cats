@@ -235,7 +235,9 @@ def _product_fields(entry: ReportEntry, account: AccountReportDetail, context: F
     """The CATS fields first, so the cap can only ever drop marker and metadata pairs.
 
     ``cats/error_message`` and ``cats/reason`` are the ReportEntry columns of the same name; blank
-    when they do not apply, and blanks are dropped below.
+    when they do not apply, and blanks are dropped below. ``cats/subtest_of`` is the test's nodeid
+    on a subtest's finding, so the finding for a block and the finding for its test can be told
+    apart and related; blank, and so absent, on every other finding.
     """
     fields: dict[str, str] = {
         "cats/version": context.cats_version,
@@ -247,6 +249,7 @@ def _product_fields(entry: ReportEntry, account: AccountReportDetail, context: F
         "cats/accounts_in_test": ",".join(participant["account_name"] for participant in entry["accounts_in_test"]),
         "cats/error_message": entry["error_message"] or "",
         "cats/reason": entry["reason"] or "",
+        "cats/subtest_of": entry["subtest"]["of"] if entry["subtest"] is not None else "",
     }
     for marker, values in entry["custom_markers"].items():
         fields[f"cats/marker/{marker}"] = ",".join(str(value) for value in values)

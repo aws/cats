@@ -36,6 +36,7 @@ def make_entry(result: ResultType) -> ReportEntry:
         "reason": None,
         "duration_s": 0.1,
         "recorded_at": "2026-09-24T10:53:17+00:00",
+        "subtest": None,
     }
 
 

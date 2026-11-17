@@ -22,6 +22,7 @@ truncated the whole evidence file at session end.
 """
 
 import json
+import xml.etree.ElementTree as ET
 from typing import Any
 
 import pytest
@@ -98,6 +99,7 @@ def test_needs_broken_fixture(broken_fixture):
             "xfail": False,
             "error_message": "RuntimeError: fixture exploded",
             "reason": None,
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -141,6 +143,7 @@ def test_passes_then_teardown_errors(broken_teardown):
             "xfail": False,
             "error_message": "RuntimeError: teardown exploded",
             "reason": None,
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -191,6 +194,7 @@ def test_teardown_error_after_call_skip_upgrades_entry_to_error(pytester: pytest
             "xfail": False,
             "error_message": "RuntimeError: teardown exploded",
             "reason": "not today",
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -285,6 +289,7 @@ def test_xfails_then_teardown_errors(broken_teardown):
             "xfail": True,
             "error_message": "RuntimeError: teardown exploded",
             "reason": "known broken",
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -476,6 +481,7 @@ def test_strict_xpass():
             "xfail": True,
             "error_message": "[XPASS(strict)] expected to fail",
             "reason": None,
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -608,6 +614,204 @@ def test_bad_metadata(cats_report):
     entries = read_report(pytester)
     expected = ("failed", 1)
     assert expected == (entries[0]["result"], len(entries))
+
+
+def test_unserializable_marker_value_fails_the_test_and_records_the_cause(pytester: pytest.Pytester) -> None:
+    """A marker value json cannot represent is caught when the entry is built: the test fails, and its entry says why.
+
+    Regression: the test had no entry at all. _record_entry raised before the entry was stored,
+    so a test pytest reported FAILED was absent from report.json, and an evidence file that
+    says nothing about a test reads as if it never ran. The entry recorded in its place has the
+    test's result and the cause, and none of the markers, accounts or metadata (one of them is
+    what could not be recorded).
+    """
+    # arrange
+    config = make_config(accounts={"testaccount": "234567890123"}, reporting={"custom_markers": ["team"]})
+    write_project(
+        pytester,
+        yaml.dump(config),
+        """
+import pytest
+
+@pytest.mark.team(object())
+def test_bad_marker():
+    '''The marker value has no JSON form.'''
+    assert True
+""",
+    )
+    nodeid = "test_unserializable_marker_value_fails_the_test_and_records_the_cause.py::test_bad_marker"
+    expected: list[dict[str, Any]] = [
+        {
+            "result": "failed",
+            "accounts_in_test": [],
+            "test_name": "test_bad_marker",
+            "nodeid": nodeid,
+            "test_docstring": "The marker value has no JSON form.",
+            "standards": [],
+            "standard_metadata": {},
+            "custom_markers": {},
+            "additional_metadata": {},
+            "xfail": False,
+            "error_message": "CATS reporting error (test itself may have passed, but this fails the test): "
+            + f"evidence entry for '{nodeid}' is not JSON-serializable: Object of type object is not JSON serializable. "
+            + "Marker values, control_ids, and metadata must be JSON types (str/int/float/bool/None/list/dict).",
+            "reason": None,
+            "subtest": None,
+        }
+    ]
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(failed=1)
+    assert expected == read_report(pytester)
+
+
+def test_a_failing_test_whose_evidence_cannot_be_built_keeps_its_own_failure_first(pytester: pytest.Pytester) -> None:
+    """The test's assertion comes first and the reporting error after it, in pytest's output and in the entry.
+
+    Regression: the reporting error replaced the test's own failure in pytest's output, so the
+    FAILURES section no longer said what the test had found.
+    """
+    # arrange
+    config = make_config(accounts={"testaccount": "234567890123"}, reporting={"custom_markers": ["team"]})
+    write_project(
+        pytester,
+        yaml.dump(config),
+        """
+import pytest
+
+@pytest.mark.team(object())
+def test_bad_marker():
+    assert 1 == 2, "own failure"
+""",
+    )
+    nodeid = "test_a_failing_test_whose_evidence_cannot_be_built_keeps_its_own_failure_first.py::test_bad_marker"
+    expected_error_message = (
+        "AssertionError: own failure\nassert 1 == 2\n"
+        + "CATS reporting error (test itself may have passed, but this fails the test): "
+        + f"evidence entry for '{nodeid}' is not JSON-serializable: Object of type object is not JSON serializable. "
+        + "Marker values, control_ids, and metadata must be JSON types (str/int/float/bool/None/list/dict)."
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*AssertionError: own failure*", "*CATS reporting error*is not JSON-serializable*"])
+    assert expected_error_message == read_report(pytester)[0]["error_message"]
+
+
+def test_a_failing_test_whose_evidence_cannot_be_built_keeps_pytests_structured_failure(pytester: pytest.Pytester) -> None:
+    """The reporting error is a titled section after pytest's traceback, not text in its place: the traceback stays structured.
+
+    What that keeps: junitxml's ``<failure message>`` is still the test's own crash line (it
+    reads ``reprcrash`` off a structured longrepr; a text one makes the whole traceback the
+    message), the ``<failure>`` body still ends with the reporting error, and pytest's FAILURES
+    section prints the error under its own separator.
+    """
+    # arrange
+    config = make_config(accounts={"testaccount": "234567890123"}, reporting={"custom_markers": ["team"], "report_formats": ["cats_json", "junit"]})
+    write_project(
+        pytester,
+        yaml.dump(config),
+        """
+import pytest
+
+@pytest.mark.team(object())
+def test_bad_marker():
+    assert 1 == 2, "own failure"
+""",
+    )
+    nodeid = "test_a_failing_test_whose_evidence_cannot_be_built_keeps_pytests_structured_failure.py::test_bad_marker"
+    reporting_error = (
+        "CATS reporting error (test itself may have passed, but this fails the test): "
+        + f"evidence entry for '{nodeid}' is not JSON-serializable: Object of type object is not JSON serializable. "
+        + "Marker values, control_ids, and metadata must be JSON types (str/int/float/bool/None/list/dict)."
+    )
+    expected = {"message": "AssertionError: own failure\nassert 1 == 2", "body_ends_with_reporting_error": True}
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.stdout.fnmatch_lines(["*_keeps_pytests_structured_failure.py:5: AssertionError", "*- CATS reporting error -*", reporting_error])
+    failure = ET.parse(pytester.path / "junit.xml").getroot().find("./testsuite/testcase/failure")  # noqa: S314 - XML written by this test's own pytest run
+    assert failure is not None
+    actual = {"message": failure.get("message"), "body_ends_with_reporting_error": (failure.text or "").endswith(reporting_error)}
+    assert expected == actual
+
+
+@pytest.mark.parametrize(
+    ("body", "outcomes", "reason"),
+    [
+        pytest.param("assert True", {"passed": 1, "errors": 1}, None, id="passed"),
+        pytest.param('pytest.skip("not here")', {"skipped": 1, "errors": 1}, "not here", id="skipped"),
+    ],
+)
+def test_a_teardown_error_that_cannot_be_recorded_is_written_onto_the_tests_entry(
+    pytester: pytest.Pytester, cats_config_content: str, body: str, outcomes: dict[str, int], reason: str | None
+) -> None:
+    """A reporting error at the teardown report updates the entry the call made rather than storing a second one under the same nodeid.
+
+    Nothing in _record_teardown_error raises today once a call entry exists, so the failure is
+    forced: a teardown error is what the fallback path would otherwise record as a new entry,
+    and one entry per nodeid per run is what the Security Hub Id and the OSCAL uuid rest on.
+    The entry's result becomes ``error`` whatever it was, as _record_teardown_error makes it:
+    a skipped entry must not hide the teardown error, and keeps its reason.
+    """
+    # arrange
+    config_path = pytester.path / "cats.yaml"
+    config_path.write_text(cats_config_content)
+    pytester.makeconftest(f'''
+import os
+os.environ["CATS_CONFIG"] = "{config_path}"
+
+import pytest
+
+import cats.pytest_plugin as plugin
+
+
+def _refuse(item, phase_report):
+    raise RuntimeError("teardown evidence refused")
+
+
+plugin._record_teardown_error = _refuse
+
+
+@pytest.fixture
+def broken_teardown():
+    yield
+    raise RuntimeError("teardown broke")
+''')
+    pytester.makepyfile(
+        f"""
+import pytest
+
+
+def test_then_teardown_errors(broken_teardown):
+    {body}
+"""
+    )
+    nodeid = "test_a_teardown_error_that_cannot_be_recorded_is_written_onto_the_tests_entry.py::test_then_teardown_errors"
+    expected = [
+        {
+            "nodeid": nodeid,
+            "result": "error",
+            "reason": reason,
+            "error_message": "RuntimeError: teardown broke\n"
+            + "CATS reporting error (test itself may have passed, but this fails the test): teardown evidence refused",
+        }
+    ]
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(**outcomes)
+    assert expected == [{key: entry[key] for key in ("nodeid", "result", "reason", "error_message")} for entry in read_report(pytester)]
 
 
 def test_class_level_cats_marker_records_standards(pytester: pytest.Pytester, cats_config_content: str) -> None:
@@ -747,6 +951,7 @@ def test_known_gap(broken_fixture):
             "xfail": True,
             "error_message": None,
             "reason": "known gap",
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)
@@ -786,6 +991,7 @@ def test_known_gap():
             "xfail": True,
             "error_message": None,
             "reason": "[NOTRUN] known gap",
+            "subtest": None,
         }
     ]
     assert expected == read_report(pytester)

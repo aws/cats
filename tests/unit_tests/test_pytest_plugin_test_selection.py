@@ -237,6 +237,7 @@ def test_not_run_entry_carries_its_evidence_from_collection(pytester: pytest.Pyt
         "error_message": None,
         "reason": "RDS not in use; accepted by CISO 2026-09-01",
         "duration_s": 0.0,
+        "subtest": None,
     }
     assert expected == entry
 

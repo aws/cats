@@ -55,6 +55,7 @@ def _make_entry() -> ReportEntry:
         "reason": None,
         "duration_s": 0.5,
         "recorded_at": "2026-09-24T10:53:17+00:00",
+        "subtest": None,
     }
 
 

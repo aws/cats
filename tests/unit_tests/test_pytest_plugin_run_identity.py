@@ -48,6 +48,7 @@ def make_entry(accounts: list[AccountReportDetail]) -> ReportEntry:
         "reason": None,
         "duration_s": 0.1,
         "recorded_at": "2026-09-24T10:53:17.000000Z",
+        "subtest": None,
     }
 
 

@@ -23,6 +23,8 @@ are common across OSCAL consumers:
   (``Pass`` / ``Fail`` / ``Error`` / ``N/A``), useful for summary filtering.
 - ``observation.props[name="control-group"]`` — the resolved
   ``control_group``, so consumers can group observations by domain.
+- ``observation.props[name="subtest-of"]`` — on a ``subtests.test()`` block's observation,
+  the nodeid of its test, so a block and its test can be told apart and related.
 - ``observation.remarks`` — the resolved control IDs space-joined, so
   consumers scanning remarks free-text for catalog IDs can pick them up.
 """
@@ -160,6 +162,9 @@ def _build_observation_props(
             props.append(Property(name=_prop_name(marker_name), value=str(val)))
     if entry["xfail"] is True:
         props.append(Property(name="xfail", value="true"))
+    # A subtest's observation names its test, so the two can be told apart and related.
+    if entry["subtest"] is not None:
+        props.append(Property(name="subtest-of", value=entry["subtest"]["of"]))
     for key, val in entry["additional_metadata"].items():
         props.append(Property(name=_prop_name(key), value=str(val)))
     return props

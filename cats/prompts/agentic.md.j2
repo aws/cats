@@ -200,8 +200,9 @@ for the pytest side.
 
 `report.json` is written by `cats test`. It is an object: `run` is the provenance of the
 evidence (run id, timestamps, `pytest_args`, `selection`, `counts`, `outputs`) and `tests` is
-one entry per test. At scale `tests` can hold tens of thousands of entries — never read the
-full file into context. The field tables in the Reports reference (the `run` block
+one entry per test, plus one per `subtests.test()` block (its `subtest` key names the test; it
+is `null` on a test's own entry). At scale `tests` can hold tens of thousands of entries — never
+read the full file into context. The field tables in the Reports reference (the `run` block
 and the entry shape) are the contract for both; they are the reference to read when a field is
 in doubt.
 

@@ -61,6 +61,7 @@ def synthetic_entry(result: str, nodeid: str, error_message: str | None, account
         "reason": None,
         "duration_s": 0.1,
         "recorded_at": datetime.now(tz=UTC).isoformat(),
+        "subtest": None,
     }
 
 

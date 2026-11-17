@@ -331,6 +331,7 @@ def test_every_entry_has_every_key(pytester: pytest.Pytester) -> None:
         "xfail": False,
         "error_message": None,
         "reason": None,
+        "subtest": None,
     }
     assert expected == entry
 

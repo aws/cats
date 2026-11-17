@@ -66,6 +66,7 @@ def _make_entry(
         "reason": None,
         "duration_s": 0.5,
         "recorded_at": "2026-09-24T10:53:17.250000Z",
+        "subtest": None,
     }
     return entry
 

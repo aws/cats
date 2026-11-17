@@ -28,7 +28,7 @@ from cats.report_writers.securityhub import (
     SkippedEntries,
     build_account_findings,
 )
-from cats.reporting import AccountReportDetail, ReportEntry, ResultType
+from cats.reporting import AccountReportDetail, ReportEntry, ResultType, SubtestDetail
 
 UPDATED_AT = "2026-09-24T10:53:40.120Z"
 NODEID = "tests/test_network.py::test_prod_cannot_reach_dev"
@@ -66,6 +66,7 @@ def make_entry(
     reason: str | None = None,
     nodeid: str = NODEID,
     test_name: str = "test_prod_cannot_reach_dev",
+    subtest: SubtestDetail | None = None,
 ) -> ReportEntry:
     return {
         "result": result,
@@ -82,6 +83,7 @@ def make_entry(
         "reason": reason,
         "duration_s": 0.5,
         "recorded_at": "2026-09-24T10:53:17+00:00",
+        "subtest": subtest,
     }
 
 
@@ -631,3 +633,43 @@ def test_resource_region_is_the_deploy_region_not_the_hub_region() -> None:
     # assert
     expected = ("us-east-1", "arn:aws:securityhub:eu-west-1:111111111111:product/111111111111/default")
     assert expected == (finding["Resources"][0]["Region"], finding["ProductArn"])
+
+
+def test_subtest_entries_are_findings_of_their_own_with_distinct_ids() -> None:
+    """Each subtest's entry has a nodeid of its own, so it is a finding of its own; the Id is the uuid5 of that nodeid.
+
+    A failed block is two findings, the block's and its test's; ``cats/subtest_of`` names the test
+    on the block's, and is absent from the test's own and from every ordinary finding.
+    """
+    # arrange
+    parent = "tests/test_s3.py::test_buckets"
+    entries = [
+        make_entry("failed", nodeid=parent, test_name="test_buckets", error_message="contains 1 failed subtest"),
+        make_entry(
+            "failed",
+            nodeid=f"{parent} [bucket-a]",
+            test_name="test_buckets [bucket-a]",
+            error_message="AssertionError: bucket-a public",
+            subtest=SubtestDetail(of=parent, msg="bucket-a", context={}),
+        ),
+        make_entry(
+            "passed",
+            nodeid=f"{parent} [bucket-b]",
+            test_name="test_buckets [bucket-b]",
+            subtest=SubtestDetail(of=parent, msg="bucket-b", context={}),
+        ),
+    ]
+
+    # act
+    groups, _ = build_account_findings(entries, CONTEXT, None)
+
+    # assert
+    [group] = groups
+    expected = [
+        (f"cats/CATS-test-infra-prod/us-east-1/{uuid5(CATS_SECURITYHUB_NAMESPACE, parent)}", "FAILED", None),
+        (f"cats/CATS-test-infra-prod/us-east-1/{uuid5(CATS_SECURITYHUB_NAMESPACE, f'{parent} [bucket-a]')}", "FAILED", parent),
+        (f"cats/CATS-test-infra-prod/us-east-1/{uuid5(CATS_SECURITYHUB_NAMESPACE, f'{parent} [bucket-b]')}", "PASSED", parent),
+    ]
+    assert expected == [
+        (finding["Id"], finding["Compliance"]["Status"], finding["ProductFields"].get("cats/subtest_of")) for finding in group.findings
+    ]

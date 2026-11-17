@@ -12,21 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
 import json
 import os
 import platform
 import shutil
 import warnings
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import _pytest.subtests  # private pytest API with no public equivalent; the pytest<10 pin bounds it (as the imports below)
 import pytest
-
-# Private pytest API with no public equivalent; the pytest<10 pin bounds it.
+from _pytest._code.code import ExceptionRepr  # the structured longrepr: a traceback with titled sections after it
 from _pytest.junitxml import mangle_test_address, xml_key
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -58,6 +60,7 @@ from cats.reporting import (
     CatsReporter,
     ReportEntry,
     ResultType,
+    SubtestDetail,
     get_account_details,
     get_cats_reporter,
     get_custom_marker_names,
@@ -93,6 +96,10 @@ _STANDARDS_REGISTRY_KEY = pytest.StashKey[Mapping[str, StandardMetadata] | None]
 WRITER_FAILURE_PREFIX = "report writing failed: "
 # CATS's own junit properties live under this prefix; user markers and metadata keys keep their own names.
 JUNIT_PROPERTY_PREFIX = "cats:"
+# The description of a subtests.test() block whose msg could not be made into text (its __str__
+# raised): the one description CATS supplies rather than copies from pytest, so the block's entry
+# still has its own nodeid. The block fails (see _record_subtest); the entry's msg is None.
+UNDESCRIBED_SUBTEST = "[<undescribed subtest>]"
 # The key the controller hands its RoleSessionName to each xdist worker under (see pytest_configure_node).
 _WORKERINPUT_ROLE_SESSION_NAME = "cats_role_session_name"
 
@@ -334,8 +341,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     overwrite cannot make the run that overwrites it dirty. The checkout described is pytest's
     rootdir, the one the test files were collected from.
     """
+    global _last_recorded  # module state, as `entries` is
     entries.clear()
     _entries_by_nodeid.clear()
+    _runs.clear()
+    _last_recorded = None
     _selection.clear()
     if _is_xdist_worker(session.config) is True or session.config.stash.get(_REPORT_RUN_KEY, None) is None:
         return
@@ -508,6 +518,7 @@ def _not_run_entry(item: pytest.Function, record: ConfigExclusionRecord) -> Repo
         "reason": record["reason"],
         "duration_s": 0.0,
         "recorded_at": rfc3339_timestamp(datetime.now(tz=UTC)),
+        "subtest": None,
     }
     return _json_safe(entry)
 
@@ -546,6 +557,92 @@ entries: list[ReportEntry] = []
 # Index into `entries` by test nodeid. A teardown failure arrives after that test's
 # call phase has already appended an entry; this is how it finds that entry to update.
 _entries_by_nodeid: dict[str, ReportEntry] = {}
+
+
+@dataclass
+class _Recorded:
+    """The entry ``pytest_runtest_makereport`` recorded last, and what it changed, until ``pytest_runtest_logreport`` reads it.
+
+    pytest makes a subtest's report with ``pytest_runtest_makereport``, where it cannot be told
+    from the test's own, and passes it to ``pytest_runtest_logreport`` as a ``SubtestReport``
+    straight after. So every ``call`` report is recorded as the test's entry, as before, and
+    the log hook turns the entry into the subtest's when the report turns out to be one,
+    putting back what recording it changed.
+
+    ``when`` is the phase the entry was recorded from, and the log hook reads the entry only
+    for the report of that phase: pytest-rerunfailures (``runtestprotocol(log=False)``) makes
+    a run's three reports first and logs them afterwards, so the setup report arrives when the
+    call entry is the one waiting.
+    """
+
+    item: pytest.Function
+    entry: ReportEntry
+    previous_by_nodeid: ReportEntry | None
+    properties_before: int
+    when: str
+
+
+# None on an xdist controller, which makes no reports and must ignore the ones workers relay.
+_last_recorded: _Recorded | None = None
+
+# How often each subtest description has been seen in this run of an item: a second block with
+# a description already seen fails (see _record_subtest), since OSCAL uuids and Security Hub Ids
+# derive from the nodeid. Reset when a run of the item starts (pytest_runtest_setup), so a rerun
+# of the item counts afresh and the count is still there when its reports are logged.
+_SUBTEST_DESCRIPTIONS_KEY = pytest.StashKey[dict[str, int]]()
+
+
+@dataclass
+class _ItemRun:
+    """What one run of an item has added to the evidence, until the run is known to stand or to be superseded.
+
+    pytest-rerunfailures logs a superseded attempt's reports with the outcome ``rerun`` and
+    takes the attempt out of pytest's own tallies (the terminal stats, ``Session.testsfailed``,
+    the failed-block count); the evidence follows it (see _drop_run): the run's entries go, and
+    ``item.user_properties`` is cut back to ``properties_before``, since the plugin runs the same
+    item again and each teardown report takes its own copy of the list when it is made
+    (``_pytest/reports.py``), so the cut lands before the next attempt's copy and junitxml, which
+    reads the copy on the teardown report it keeps, sees the last attempt's properties once. So
+    report.json, OSCAL, Security Hub and junit.xml all hold the last attempt alone, as pytest's
+    summary counts it.
+    """
+
+    item: pytest.Item
+    properties_before: int
+    entries: list[ReportEntry] = field(default_factory=list)
+
+
+# The current run of each item by nodeid, from pytest_runtest_setup until its teardown report is
+# logged (the run stands) or a ``rerun`` report arrives (it does not). One item at a time, serially.
+_runs: dict[str, _ItemRun] = {}
+
+# The outcome pytest-rerunfailures gives a report of an attempt it is about to run again.
+RERUN_OUTCOME = "rerun"
+
+# pytest's count of failed blocks per test, which its own status hook reads to fail the test
+# (``_pytest/subtests.py``). A private name, like xml_key above, but load-bearing: looked up
+# rather than imported, so a pytest release that moves it degrades one path (a block CATS fails
+# no longer fails its test; the block and the run still do) instead of stopping the plugin loading.
+# The count is keyed as _failed_subtests_count_key says, which is why the key type is open.
+_FAILED_SUBTESTS_KEY: pytest.StashKey[defaultdict[object, int]] | None = getattr(_pytest.subtests, "failed_subtests_key", None)
+
+# pytest 9.2 gave nodes and reports a structured ``id`` (``_pytest.nodeid.NodeId``) beside the
+# ``nodeid`` text, and keys the count above by it. The module is the test for that pytest, as
+# pytest-rerunfailures tests it: another plugin may give a node an unrelated ``id`` attribute.
+_STRUCTURED_NODE_ID: bool = importlib.util.find_spec("_pytest.nodeid") is not None
+
+
+def _failed_subtests_count_key(item: pytest.Item) -> object:
+    """The key pytest counts ``item``'s failed blocks under: the key its own writer uses, so the count CATS adds to is the one pytest reads.
+
+    From pytest 9.2 that is the item's structured ``id``; before it, the ``nodeid`` text. A
+    count added under the other is one pytest never reads: the block fails and the test does
+    not, with nothing to say so. That is also the degraded path a pytest with the module but
+    no ``Node.id`` takes, by design: the ``nodeid`` then, rather than an AttributeError inside
+    the block's exit, which would fail the user's test with a CATS traceback.
+    """
+    structured_id = getattr(item, "id", None) if _STRUCTURED_NODE_ID is True else None  # ``Node.id`` postdates the locked pytest's typings
+    return item.nodeid if structured_id is None else structured_id
 
 
 @pytest.fixture
@@ -599,7 +696,17 @@ def _extract_error_message(phase_report: pytest.TestReport) -> str | None:
 
 
 def _record_entry(item: pytest.Function, phase_report: pytest.TestReport) -> None:
-    """Build the evidence entry for one test and store it in `entries`."""
+    """Build the evidence entry for one test and store it in `entries`.
+
+    Everything that can refuse (a marker value json cannot represent, an account that cannot
+    be described) happens in _build_entry, before anything is stored: when this raises, no
+    entry was added, and pytest_runtest_makereport stores a fallback in its place.
+    """
+    _store_entry(item, _build_entry(item, phase_report), phase_report.when)
+
+
+def _build_entry(item: pytest.Function, phase_report: pytest.TestReport) -> ReportEntry:
+    """The evidence entry for one phase report, JSON-safe, or CatsError naming what could not be recorded."""
     cats_reporter = get_cats_reporter(item)
     account_details = get_account_details(item, cats_reporter)
     standard_markers = get_standard_markers(item)
@@ -607,7 +714,6 @@ def _record_entry(item: pytest.Function, phase_report: pytest.TestReport) -> Non
     custom_markers = get_custom_markers(item)
 
     result = _entry_result(item, phase_report)
-    is_xfail = any(item.iter_markers(name="xfail")) or getattr(phase_report, "wasxfail", None) is not None
     test_docstring = item.function.__doc__
     error_message = _extract_error_message(phase_report) if result in ("failed", "error") else None
     reason = _extract_reason(phase_report, result)
@@ -625,18 +731,59 @@ def _record_entry(item: pytest.Function, phase_report: pytest.TestReport) -> Non
         "standard_metadata": standard_metadata,
         "custom_markers": custom_markers,
         "additional_metadata": additional_metadata,
-        "xfail": is_xfail,
+        "xfail": _is_xfail(item, phase_report),
         "error_message": error_message,
         "reason": reason,
         "duration_s": phase_report.duration,
         "recorded_at": rfc3339_timestamp(datetime.now(tz=UTC)),
+        "subtest": None,
     }
 
     # Evidence is written verbatim or not at all; see _json_safe.
-    entry = _json_safe(entry)
+    return _json_safe(entry)
 
+
+def _fallback_entry(item: pytest.Function, phase_report: pytest.TestReport, error_message: str) -> ReportEntry:
+    """The entry for a test whose evidence could not be built: its result and the cause, and none of the evidence that failed.
+
+    Built after pytest_runtest_makereport has marked the report failed, so the result is the
+    one pytest will print (``failed``, or ``error`` for a setup or teardown phase) and
+    ``error_message`` is what _fail_report composed: the test's own failure first when it had
+    one, then the reporting error. Accounts, standards, markers and metadata are empty: one of
+    them is what could not be recorded, and a partial set would read as the whole.
+    """
+    entry: ReportEntry = {
+        "result": _entry_result(item, phase_report),
+        "accounts_in_test": [],
+        "test_name": item.name,
+        "nodeid": item.nodeid,
+        "test_docstring": item.function.__doc__,
+        "standards": [],
+        "standard_metadata": {},
+        "custom_markers": {},
+        "additional_metadata": {},
+        "xfail": _is_xfail(item, phase_report),
+        "error_message": error_message,
+        "reason": None,
+        "duration_s": phase_report.duration,
+        "recorded_at": rfc3339_timestamp(datetime.now(tz=UTC)),
+        "subtest": None,
+    }
+    return _json_safe(entry)
+
+
+def _is_xfail(item: pytest.Function, phase_report: pytest.TestReport) -> bool:
+    """Whether the test is an expected failure: by marker, or by ``pytest.xfail()`` (``wasxfail`` on the report)."""
+    return any(item.iter_markers(name="xfail")) or getattr(phase_report, "wasxfail", None) is not None
+
+
+def _store_entry(item: pytest.Function, entry: ReportEntry, when: str) -> None:
+    """Add a built entry to the evidence: the list, the index by nodeid, the JUnit properties, and the hand-off to pytest_runtest_logreport."""
+    global _last_recorded  # module state, as `entries` is
+    _last_recorded = _Recorded(item, entry, _entries_by_nodeid.get(item.nodeid), len(item.user_properties), when)
     entries.append(entry)
     _entries_by_nodeid[item.nodeid] = entry
+    _runs.setdefault(item.nodeid, _ItemRun(item, len(item.user_properties))).entries.append(entry)
 
     _record_junit_properties(item, entry)
 
@@ -645,7 +792,8 @@ def _json_safe(entry: ReportEntry) -> ReportEntry:
     """The entry after a JSON round trip, or CatsError naming the culprit.
 
     Evidence is written verbatim or not at all: a value json.dump cannot represent fails this
-    test with the culprit named. Left until session end, the same value would truncate the whole
+    test with the culprit named, and the entry stored in its place records the cause (see
+    _fallback_entry). Left until session end, the same value would truncate the whole
     evidence file. add_report_metadata already rejects bad metadata at the call site; this catches
     marker and decorator values.
 
@@ -783,13 +931,256 @@ def pytest_runtest_makereport(
                 _record_teardown_error(item, phase_report)
 
     except Exception as e:
-        # Attach CATS error to the phase report so it's visible, not swallowed
+        # The report says failed, so pytest's summary and exit status do (pytest reads it after
+        # this hook), and the entry says why: a test whose evidence could not be built is in
+        # report.json as a failure with the cause named, not absent from it. A teardown error
+        # that could not be recorded against the entry the call made is written onto that entry,
+        # as _record_teardown_error would have: a passed, skipped, xfailed or xpassed entry
+        # becomes an error (a teardown error must neither stand as passing evidence nor hide
+        # behind a skip; the skip or xfail reason stays), a failed or error one keeps its result,
+        # and every one gains the message. One entry per nodeid per run, which the Security Hub
+        # Id and the OSCAL uuid rest on. A fallback entry is stored only when there is none.
         if phase_report is not None:
-            phase_report.outcome = "failed"
-            phase_report.longrepr = f"CATS reporting error (test itself may have passed, but this fails the test): {e}"
+            error_message = _fail_report(phase_report, _reporting_error_message(e))
+            try:
+                existing = _entries_by_nodeid.get(item.nodeid) if phase_report.when == "teardown" else None
+                if existing is not None:
+                    if existing["result"] not in ("failed", "error"):
+                        existing["result"] = "error"
+                    own_message = existing["error_message"]
+                    existing["error_message"] = error_message if own_message is None else f"{own_message}\n{error_message}"
+                else:
+                    _store_entry(item, _fallback_entry(item, phase_report, error_message), phase_report.when)
+            except Exception as store_error:
+                warnings.warn(f"CATS could not record the reporting error for {item.nodeid}: {store_error}", stacklevel=2)
         warnings.warn(f"CATS reporting failed: {e}", stacklevel=2)
 
     return phase_report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """A run of the item starts: its subtest descriptions count afresh, and its entries are this run's.
+
+    ``tryfirst``, so before any fixture runs a ``subtests.test()`` block. Here rather than at
+    the teardown report because a plugin that logs a run's reports after teardown
+    (pytest-rerunfailures) still needs the count when the call report is logged.
+    """
+    item.stash[_SUBTEST_DESCRIPTIONS_KEY] = {}
+    _runs[item.nodeid] = _ItemRun(item, len(item.user_properties))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Make a subtest's entry its own, and give the test's entry the result pytest reports.
+
+    A ``SubtestReport`` is a ``subtests.test()`` block: the entry just recorded for it becomes
+    the block's (see _record_subtest). For the test's own call report, pytest decides in
+    ``pytest_report_teststatus`` that a body which passed while a block failed is failed; the
+    hook is asked here, so the entry carries pytest's verdict and wording. ``tryfirst`` puts
+    this before the terminal reporter, so a reporting error that marks the report failed shows
+    in pytest's summary; what pytest had already read off the report by then is put right in
+    the except branch below. A report of an attempt pytest-rerunfailures is about to run again
+    takes the attempt's entries with it (see _drop_run).
+    """
+    global _last_recorded  # module state, as `entries` is
+    if _is_rerun(report) is True:
+        _drop_run(report.nodeid)
+        return
+    if report.when == "teardown":
+        _runs.pop(report.nodeid, None)  # the last report of a run that stands: nothing can supersede it now
+    recorded = _last_recorded
+    if recorded is None or recorded.item.nodeid != report.nodeid or recorded.when != report.when:
+        return  # not the report the entry was recorded from (see _Recorded.when)
+    _last_recorded = None
+    if report.when != "call":
+        return  # a setup skip or error, or a teardown failure: the entry stands as recorded
+    try:
+        if isinstance(report, pytest.SubtestReport):
+            _record_subtest(recorded, report)
+        elif len(recorded.item.stash.get(_SUBTEST_DESCRIPTIONS_KEY, {})) > 0:
+            # pytest rewrites a passed body with failed blocks to ``failed`` inside this hook
+            # (``_pytest/subtests.py``, ``pytest_report_teststatus``), which the terminal reporter
+            # calls after this plugin has run. This call is what produces the verdict, serially
+            # and on an xdist worker alike (the worker's terminal reporter runs after this plugin
+            # too, and the report is sent after both); the controller never gets here, since it
+            # makes no reports and so has nothing recorded. The entry rests on pytest keeping the
+            # rewrite in that hook; the pytester tests in test_pytest_plugin_subtests.py pin it.
+            # Only a test that ran a block is asked: every other test takes the path it always did,
+            # and no other plugin's implementation of the hook runs twice for it.
+            recorded.item.config.hook.pytest_report_teststatus(report=report, config=recorded.item.config)
+            if report.failed is True and recorded.entry["result"] not in ("failed", "error"):
+                recorded.entry["result"] = "failed"
+                recorded.entry["error_message"] = _extract_error_message(report)
+                recorded.entry["reason"] = None
+    except Exception as e:
+        # The report, the entry and the run all say failed. A block that had failed on its own
+        # keeps that failure first, with the reporting error after it, and pytest has counted
+        # it. A report that had not failed is counted here as pytest would have, had it been
+        # failed when pytest read it (before this hook): a block's failure is added to its
+        # test's count, so the test fails as it does for any failed block, and to the
+        # session's, so the exit status and --maxfail see it.
+        newly_failed = report.failed is False
+        recorded.entry["error_message"] = _fail_report(report, _reporting_error_message(e))
+        if newly_failed is True:
+            recorded.entry["result"] = "failed"
+            recorded.entry["reason"] = None
+            if isinstance(report, pytest.SubtestReport) and _FAILED_SUBTESTS_KEY is not None:
+                recorded.item.config.stash[_FAILED_SUBTESTS_KEY][_failed_subtests_count_key(recorded.item)] += 1
+            _count_failure(recorded.item.session)
+        warnings.warn(f"CATS reporting failed: {e}", stacklevel=2)
+
+
+def _reporting_error_message(error: Exception) -> str:
+    """The text a CATS reporting error puts on the report it fails and in the entry's ``error_message``."""
+    return f"CATS reporting error (test itself may have passed, but this fails the test): {error}"
+
+
+_REPORTING_ERROR_SECTION = "CATS reporting error"
+
+
+def _fail_report(report: pytest.TestReport, message: str) -> str:
+    """Fail ``report`` for a CATS reporting error; the text the entry's ``error_message`` takes.
+
+    A report that had failed on its own keeps that failure first, in pytest's output and in the
+    text returned: the message is a titled section after pytest's traceback, so the traceback
+    keeps its formatting, junitxml's ``<failure message>`` stays the test's own crash line, and
+    the section rides with the report through xdist's serialization. Only a longrepr that is
+    already text (an item's own ``repr_failure`` may return one) is joined as text. One that had
+    not failed is marked failed with the message alone, an expected failure included: pytest's
+    status hook has no label for failed-with-``wasxfail`` and would print a bare FAILED, so the
+    attribute goes.
+    """
+    if report.failed is True:
+        own_message = _extract_error_message(report)
+        if isinstance(report.longrepr, ExceptionRepr):
+            report.longrepr.addsection(_REPORTING_ERROR_SECTION, message)
+        else:
+            report.longrepr = f"{report.longrepr}\n\n{message}"
+        return message if own_message is None else f"{own_message}\n{message}"
+    report.outcome = "failed"
+    report.longrepr = message
+    if hasattr(report, "wasxfail"):
+        del report.wasxfail
+    return message
+
+
+def _count_failure(session: pytest.Session) -> None:
+    """Count a report this plugin failed in ``pytest_runtest_logreport`` as pytest's ``Session`` would have.
+
+    ``Session.pytest_runtest_logreport`` is ``tryfirst`` and registers after this plugin, so it
+    ran first and saw the report passed. These are its lines: ``testsfailed`` is what makes the
+    exit status ``TESTS_FAILED``, and ``shouldfail`` is how ``--maxfail`` and ``-x`` stop a run.
+    """
+    session.testsfailed += 1
+    maxfail = session.config.getvalue("maxfail")
+    if maxfail and session.testsfailed >= maxfail:
+        session.shouldfail = f"stopping after {session.testsfailed} failures"
+
+
+def _is_rerun(report: pytest.TestReport) -> bool:
+    """Whether pytest-rerunfailures is about to run this report's item again, so the attempt it reports does not count."""
+    outcome: str = report.outcome  # pytest's type names passed, failed and skipped; the plugin sets a fourth
+    return outcome == RERUN_OUTCOME
+
+
+def _drop_run(nodeid: str) -> None:
+    """Take a superseded attempt out of the evidence, as pytest-rerunfailures takes it out of pytest's tallies.
+
+    Everything this run of the item recorded goes: the test's own entry (a setup skip or error,
+    the call, or the call upgraded by a teardown failure), each block's, and the JUnit properties
+    they put on the item. Identity, not equality: two attempts can record equal entries. The
+    run's entries are the tail of ``entries`` (items run one at a time and nothing else appends
+    during a run), so they are popped from it; should one not be there, the whole list is
+    filtered once. The next attempt starts from pytest_runtest_setup. Nothing is recorded on an
+    xdist controller, so there this is a no-op; the worker, where the entries are, is sent the
+    same report.
+    """
+    global _last_recorded  # module state, as `entries` is
+    run = _runs.pop(nodeid, None)
+    if run is None:
+        return
+    dropped = {id(entry) for entry in run.entries}
+    while len(entries) > 0 and id(entries[-1]) in dropped:
+        dropped.discard(id(entries.pop()))
+    if len(dropped) > 0:
+        entries[:] = [entry for entry in entries if id(entry) not in dropped]
+    if id(_entries_by_nodeid.get(nodeid)) in {id(entry) for entry in run.entries}:
+        del _entries_by_nodeid[nodeid]
+    if _last_recorded is not None and _last_recorded.item.nodeid == nodeid:
+        _last_recorded = None
+    del run.item.user_properties[run.properties_before :]
+
+
+def _record_subtest(recorded: _Recorded, report: pytest.SubtestReport) -> None:
+    """Turn the entry recorded for a ``subtests.test()`` block into the block's own.
+
+    Its nodeid is the test's followed by pytest's description of the block, the text its
+    status line shows; it keeps the result, accounts, standards and markers it was recorded
+    with. The test's own entry stays the one a teardown failure upgrades, and the JUnit
+    properties go on the test's testcase once, so recording the block's entry is undone there.
+
+    The description is the block's identity in the evidence: Security Hub Ids and OSCAL uuids
+    derive from the nodeid. pytest is content to print one description twice; here a second
+    block with the same description is an error. A ``msg`` that is not a string is one too:
+    ``msg`` is kept verbatim in the evidence, and json.dump writes strings and ``None`` only.
+    A ``msg`` whose text cannot be made (its ``__str__`` raises) is described as
+    ``[<undescribed subtest>]``, the one description CATS itself supplies, and is an error too.
+
+    Every error is raised last: the entry is renamed, given its ``subtest`` detail and the
+    test's state restored first, so the block fails with the cause named, its entry is still a
+    block's, and the report never holds two entries under the test's nodeid. The test then
+    fails as it does for any failed block (pytest_runtest_logreport adds the block to pytest's
+    count). A repeated description carries `` #2`` so no two entries share a nodeid; the suffix
+    appears on no other entry. The keyword arguments are already text, rendered by pytest when
+    the block ended, so the detail needs no JSON round trip of its own.
+    """
+    item = recorded.item
+    msg = report.context.msg
+    error: CatsError | None = None
+    try:
+        description = _subtest_description(report)
+        # Verbatim when it is what the docs ask for; its text on the entry that fails for not being so.
+        recorded_msg = msg if msg is None or isinstance(msg, str) else str(msg)
+    except Exception as e:
+        description = UNDESCRIBED_SUBTEST
+        recorded_msg = None
+        error = CatsError(f"a subtest of {item.nodeid} could not be described: {e!r}; msg must be a string.")
+    seen = item.stash.setdefault(_SUBTEST_DESCRIPTIONS_KEY, {})
+    seen[description] = seen.get(description, 0) + 1
+    duplicate = seen[description] > 1
+    suffixed = f"{description} #{seen[description]}" if duplicate is True else description
+
+    recorded.entry["nodeid"] = f"{item.nodeid} {suffixed}"
+    recorded.entry["test_name"] = f"{item.name} {suffixed}"
+    recorded.entry["subtest"] = SubtestDetail(of=item.nodeid, msg=recorded_msg, context=dict(report.context.kwargs))
+    del item.user_properties[recorded.properties_before :]
+    if recorded.previous_by_nodeid is None:
+        del _entries_by_nodeid[item.nodeid]
+    else:
+        _entries_by_nodeid[item.nodeid] = recorded.previous_by_nodeid
+
+    if error is not None:
+        raise error
+    if duplicate is True:
+        raise CatsError(
+            f"duplicate subtest description {description!r} in {item.nodeid}: the description is the block's identity "
+            + "in the evidence, so give each block a unique msg or keyword arguments."
+        )
+    if msg is not None and not isinstance(msg, str):
+        raise CatsError(
+            f"subtest msg {msg!r} in {item.nodeid} has type {type(msg).__name__}: msg is kept verbatim in the evidence, so it must be a string."
+        )
+
+
+def _subtest_description(report: pytest.SubtestReport) -> str:
+    """``[msg] (key=value, ...)``: the text pytest's status line shows for the block (``SubtestReport._sub_test_description``)."""
+    parts: list[str] = []
+    if report.context.msg is not None:
+        parts.append(f"[{report.context.msg}]")
+    if report.context.kwargs:
+        parts.append("(" + ", ".join(f"{key}={value}" for key, value in report.context.kwargs.items()) + ")")
+    return " ".join(parts) or "(<subtest>)"
 
 
 @pytest.hookimpl(wrapper=True, trylast=True)

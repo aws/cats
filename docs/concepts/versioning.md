@@ -178,7 +178,14 @@ pytest owns `-c`.
   pytest's rootdir. `cats init` pins the rootdir with an ini file at the project root: a
   `[tool.pytest.ini_options]` section in an existing `pyproject.toml`, else a `pytest.ini`.
   The node id is the key of every entry, the sort order of the file, and the seed of every
-  OSCAL and Security Hub identifier.
+  OSCAL and Security Hub identifier. A `subtests.test()` block's entry is keyed by the
+  node id followed by the block's description, `tests/test_x.py::test_y [bucket-a]`, and
+  names the node id in `subtest.of`. This was additive, not a change of meaning: every entry
+  that existed before keeps its node id and every identifier derived from it, and the composed
+  form appears only on the new entries, which no earlier release produced. The description is
+  part of the identity and so covered: it is what pytest prints for the block, `[msg]` then
+  `(key=value, ...)` with values as pytest renders them, or `[<undescribed subtest>]` for a block
+  whose `msg` has no text; a change to that text would move every block's identifiers and is major.
 - **Results** are `passed`, `failed`, `skipped`, `xpassed`, `xfailed`, `error` and `not_run`.
   The six pytest outcomes are frozen. `not_run` is a test `test_selection` held back, recorded
   with its reason; it counts in `counts.total` and `counts.not_run`, and `run.selection` carries
@@ -202,8 +209,8 @@ Covered, because a finding `Id` is sticky for 90 days in the customer's hub:
 - The finding `Id` scheme: `cats/{cfn_stack_prefix}{keyname}/{aws_region}/{uuid5(nodeid)}`.
 - The fixed `ProductFields` key names: `cats/version`, `cats/run_id`, `cats/nodeid`,
   `cats/account_name`, `cats/aws_region`, `cats/result`, `cats/accounts_in_test`,
-  `cats/error_message`, `cats/reason`, and the prefixes `cats/marker/<name>` and
-  `cats/metadata/<key>`. Rename or removal is major; a new key is minor.
+  `cats/error_message`, `cats/reason`, `cats/subtest_of`, and the prefixes
+  `cats/marker/<name>` and `cats/metadata/<key>`. Rename or removal is major; a new key is minor.
 - The result mapping:
 
     | pytest result | `Compliance.Status` | `RecordState` |

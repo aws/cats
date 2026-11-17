@@ -480,6 +480,64 @@ def test_traffic_matrix(
     assert result == expected
 ```
 
+## Subtests: one check per discovered resource
+
+Use pytest's `subtests` fixture when you only find out what to check while the test runs, such
+as every log group in an account. Each check gets its own pass or fail, and a failure doesn't
+stop the loop:
+
+```python
+import pytest
+from cats import AccountUnderTest, cats
+
+
+@cats(standard_name="SOC2-CC7.2")
+def test_log_group_retention(prod_account: AccountUnderTest, subtests: pytest.Subtests) -> None:
+    """Every log group retains logs for 365 days."""
+    logs = prod_account.role.readonly.client("logs")
+    groups = [group for page in logs.get_paginator("describe_log_groups").paginate() for group in page["logGroups"]]
+    assert groups, "no log groups discovered"
+
+    for group in groups:
+        with subtests.test(msg=group["logGroupName"], region="us-east-1"):
+            assert group.get("retentionInDays") == 365
+```
+
+Each block becomes its own report entry, named after the test and the block
+(`test_log_group_retention [/aws/lambda/orders] (region='us-east-1')`), so a failure names the
+log group. See [Subtests in `report.json`](../api-reference/Reports.md#subtests).
+
+Tips:
+
+- **Check that you found something.** If the list is empty, no blocks run and the test passes.
+  The `assert groups, ...` line turns an empty list into a failure.
+- **Put the resource name in `msg`, as a string.** It is shown exactly. A `msg` that is not a
+  string (a `Path`, an int) fails the block. Keep it to one line: it becomes part of the block's
+  `nodeid`, which is printed in summaries and copied into finding titles. Other keyword arguments
+  are shown as pytest prints them and cut at 240 characters, so keep them short.
+- **Give every block a different `msg`, and keep it the same from run to run.** `msg` and the
+  keyword arguments become the block's `nodeid`, and the Security Hub finding `Id` and OSCAL
+  uuids derive from it. Two blocks with the same description in one test fail the second one,
+  because two findings would share an identity. A value that changes every run (a timestamp, a
+  request id, an object's default `repr`) makes a new finding every run and never updates or
+  retires the old one. Use the resource's own name or ARN; for data with no natural name,
+  `enumerate` works if the source order is stable:
+
+  ```python
+  for index, statement in enumerate(policy["Statement"]):
+      with subtests.test(msg=f"statement-{index}", sid=statement.get("Sid")):
+          assert statement["Effect"] == "Deny"
+  ```
+
+- **Accounts registered during the loop land on later blocks.** A block's entry carries the
+  accounts and `add_report_metadata` values the test had registered when the block ended, so
+  `get_account_fixture(name)` inside the loop puts account N on blocks N onward. For one account
+  per block, take the accounts as fixture parameters instead; they are on every entry.
+- **Choose what a block covers.** One block per resource is common; one per region or per
+  resource type works too. Each block is a separate report entry and Security Hub finding.
+- **Markers cover the whole test.** Every block gets the test's `@cats(...)` standard and
+  markers. A read-only check and a check that changes something belong in separate tests.
+
 ## Multi-Region Testing
 
 Create clients in specific regions to test across your AWS footprint:
