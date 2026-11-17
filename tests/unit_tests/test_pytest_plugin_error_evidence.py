@@ -411,6 +411,88 @@ def test_expected_failure():
     assert expected == (entries[0]["result"], entries[0]["reason"])
 
 
+def test_xfail_with_setup_error_is_recorded_as_xfailed(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """pytest reports an xfail test whose fixture errors as XFAIL; the evidence must not say skipped."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_fixture():
+    raise RuntimeError("fixture exploded")
+
+@pytest.mark.xfail(reason="known gap")
+def test_known_gap(broken_fixture):
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xfailed=1)
+    expected: list[dict[str, Any]] = [
+        {
+            "result": "xfailed",
+            "accounts_in_test": [],
+            "test_name": "test_known_gap",
+            "nodeid": "test_xfail_with_setup_error_is_recorded_as_xfailed.py::test_known_gap",
+            "test_docstring": None,
+            "standards": [],
+            "standard_metadata": {},
+            "custom_markers": {},
+            "additional_metadata": {},
+            "xfail": True,
+            "error_message": None,
+            "reason": "known gap",
+        }
+    ]
+    assert expected == read_report(pytester)
+
+
+def test_xfail_run_false_is_recorded_as_xfailed(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """pytest reports xfail(run=False) as XFAIL with a [NOTRUN] reason; the evidence must not say skipped."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.mark.xfail(run=False, reason="known gap")
+def test_known_gap():
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xfailed=1)
+    expected: list[dict[str, Any]] = [
+        {
+            "result": "xfailed",
+            "accounts_in_test": [],
+            "test_name": "test_known_gap",
+            "nodeid": "test_xfail_run_false_is_recorded_as_xfailed.py::test_known_gap",
+            "test_docstring": None,
+            "standards": [],
+            "standard_metadata": {},
+            "custom_markers": {},
+            "additional_metadata": {},
+            "xfail": True,
+            "error_message": None,
+            "reason": "[NOTRUN] known gap",
+        }
+    ]
+    assert expected == read_report(pytester)
+
+
 def test_stacked_duplicate_standard_records_once(pytester: pytest.Pytester, cats_config_content: str) -> None:
     """Stacking the same standard_name twice once duplicated report entries and props."""
     # arrange

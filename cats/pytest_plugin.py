@@ -556,14 +556,14 @@ def cats_report() -> CatsReporter:
 
 def _entry_result(item: pytest.Function, phase_report: pytest.TestReport) -> ResultType:
     """Map one phase's TestReport to the result the evidence entry records."""
+    if phase_report.outcome == "skipped" and getattr(phase_report, "wasxfail", None) is not None:
+        return "xfailed"  # Expected failure (x): by marker, pytest.xfail(), a setup error under xfail, or xfail(run=False)
     if phase_report.when == "setup":
         return "error" if phase_report.failed is True else "skipped"
     if phase_report.when == "teardown":
         return "error"
     if phase_report.outcome == "passed" and any(item.iter_markers(name="xfail")):
         return "xpassed"  # Unexpected pass (X), non-strict
-    if phase_report.outcome == "skipped" and getattr(phase_report, "wasxfail", None) is not None:
-        return "xfailed"  # Expected failure (x), by marker or pytest.xfail()
     # "failed" stays "failed" even under an xfail marker: strict XPASS and a
     # raises= mismatch are failures in pytest's own summary.
     return phase_report.outcome
