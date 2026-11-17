@@ -507,7 +507,7 @@ def test_destroy_all_prints_a_failure_that_polling_finds(
     write_config(cats_yaml, config)
     mock_client = MagicMock()
     mock_client.describe_stacks.side_effect = lambda **kwargs: {
-        "Stacks": [{"StackId": _stack_id(str(kwargs["StackName"])), "StackStatus": "CREATE_COMPLETE"}]
+        "Stacks": [{"StackId": _stack_id(str(kwargs["StackName"])), "StackStatus": "CREATE_COMPLETE", "Tags": make_stack_tags()}]
     }
     mock_client.list_stack_resources.return_value = {"StackResourceSummaries": []}
     denied = ClientError(

@@ -106,6 +106,14 @@ VERSION_UNKNOWN_DEPLOY_ERROR = (
     + "It was not created by 'cats infra deploy'. "
     + RECREATE_REMEDIATION
 )
+KEYNAME_COLLISION_ERROR = (
+    "Stack {stack_name} was deployed for account keyname '{deployed_keyname}', not '{account_name}': "
+    + "the two names concatenate with cfn_stack_prefix to the same stack name. "
+)
+NOT_MANAGED_DESTROY_ERROR = (
+    "Stack {stack_name} is not tagged {managed_tag_key}={managed_tag_value} so CATS will not delete it: "
+    + "'cats infra deploy' did not create it. Delete it yourself, or destroy with the cfn_stack_prefix that deployed the CATS stack."
+)
 
 
 @dataclass
@@ -157,6 +165,11 @@ class StackState:
     account_keyname: str | None  # the cats:account-keyname tag: which config keyname deployed the stack
 
 
+def is_cats_managed(stack: "StackTypeDef") -> bool:
+    """Whether the stack carries the tag every 'cats infra deploy' writes; only such a stack is ever deleted."""
+    return any(tag.get("Key") == CATS_MANAGED_TAG_KEY and tag.get("Value") == CATS_MANAGED_TAG_VALUE for tag in stack.get("Tags", []))
+
+
 def read_deployed_version(stack: "StackTypeDef") -> str | None:
     """Return the CATS release recorded in the stack's tags, or None if it was not deployed by CATS."""
     for tag in stack.get("Tags", []):
@@ -199,7 +212,7 @@ def describe_stack_state(cfn: "CloudFormationClient", stack_name: str) -> StackS
             return None
         raise
 
-    cats_managed = any(tag.get("Key") == CATS_MANAGED_TAG_KEY and tag.get("Value") == CATS_MANAGED_TAG_VALUE for tag in stack.get("Tags", []))
+    cats_managed = is_cats_managed(stack)
     has_udp_receipt_token = any(p.get("ParameterKey") == UDP_RECEIPT_TOKEN_PARAMETER_KEY for p in stack.get("Parameters", []))
     return StackState(
         status=str(stack["StackStatus"]),
@@ -296,8 +309,7 @@ def start_deploy(
             account_name=account_name,
             success=False,
             error=(
-                f"Stack {stack_name} was deployed for account keyname '{state.account_keyname}', not '{account_name}': "
-                + "the two names concatenate with cfn_stack_prefix to the same stack name. "
+                KEYNAME_COLLISION_ERROR.format(stack_name=stack_name, deployed_keyname=state.account_keyname, account_name=account_name)
                 + "Deploy with a different cfn_stack_prefix, or rename one of the keynames."
             ),
         )
@@ -433,18 +445,40 @@ def start_destroy(
 ) -> PendingStack | DeployResult:
     """Start stack deletion, return immediately.
 
-    Returns DeployResult if stack doesn't exist.
+    Returns DeployResult if the stack does not exist, if it is not tagged cats:managed=true, or if
+    another account keyname deployed it. Both refusals come before the bucket is emptied: the stack
+    name is all that identifies it, and a config whose cfn_stack_prefix lands on someone else's stack,
+    or on the stack of another keyname ("CATS-" + "aprod" and "CATS-a" + "prod"), must not empty it.
     Returns PendingStack for operations that need polling.
     """
     cfn: CloudFormationClient = session.client("cloudformation", region_name=region, config=BOTO_RETRY_CONFIG)
 
     try:
-        response = cfn.describe_stacks(StackName=stack_name)
-        stack_id = response["Stacks"][0]["StackId"]
+        stack = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
     except ClientError as e:
         if "does not exist" in str(e):
             return DeployResult(account_name=account_name, success=True, already_absent=True)
         return DeployResult(account_name=account_name, success=False, error=str(e))
+
+    if is_cats_managed(stack) is False:
+        return DeployResult(
+            account_name=account_name,
+            success=False,
+            error=NOT_MANAGED_DESTROY_ERROR.format(
+                stack_name=stack_name, managed_tag_key=CATS_MANAGED_TAG_KEY, managed_tag_value=CATS_MANAGED_TAG_VALUE
+            ),
+        )
+    deployed_keyname = read_deployed_account_keyname(stack)
+    if deployed_keyname is not None and deployed_keyname != account_name:
+        return DeployResult(
+            account_name=account_name,
+            success=False,
+            error=(
+                KEYNAME_COLLISION_ERROR.format(stack_name=stack_name, deployed_keyname=deployed_keyname, account_name=account_name)
+                + "Destroy it from the config that deployed it."
+            ),
+        )
+    stack_id = stack["StackId"]
 
     try:
         empty_cats_bucket(session, stack_name, region)
