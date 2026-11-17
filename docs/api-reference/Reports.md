@@ -8,8 +8,10 @@ is the idea behind them.
 
 The file is a JSON object with three keys: `schema_version`, the shape of this document;
 `run`, the provenance of the evidence; and `tests`, one entry per test sorted by `nodeid`.
-Query the entries with `jq '.tests[]'`; gate a pipeline with
-`jq -e '.run.counts.failed == 0' report.json`.
+Query the entries with `jq '.tests[]'`. Gate a pipeline on the exit status of `cats test`,
+which is non-zero for a failed test, a setup or teardown error, a test pack that fails to
+import, and a failed report writer. The file is evidence, not a gate: `counts.failed` is 0
+for a setup error (counted under `error`) and for an import failure (no entries at all).
 
 `schema_version` is `1` and moves only with a breaking change to the document; new fields
 are added without moving it, so a consumer checks one integer to know whether its reader
@@ -96,7 +98,7 @@ Security Hub identifiers, however pytest is invoked.
 | `aws_region` | string or null | `cats_deployment_settings.aws_region` after the `AWS_REGION` fallback; `null` when the run had no Region configured |
 | `partition` | string | `cats_deployment_settings.partition`, derived from the Region when unset. With `aws_region` and `cfn_stack_prefix`, an input to every deployed role name and Security Hub finding `Id` |
 | `cfn_stack_prefix` | string | `cats_deployment_settings.cfn_stack_prefix` |
-| `exit_status` | integer | pytest's exit code |
+| `exit_status` | integer | pytest's exit code when the report was assembled, before the writers ran: `1` for a failed test or a setup or teardown error, `2` for a collection error. A failed writer also exits the process with `1` but shows here as `0`; read `writers` for it |
 | `selection` | object | What narrowed the run, as a record. The command-line selectors: `keyword` (`-k`), `markexpr` (`-m`), `last_failed` (`--lf`), `deselect`, `explicit_args` (the paths or node ids on the command line), `stopped_early` (why the run stopped before the last test, or `""`). Then what `test_selection` decided: `provided` (every requirement the run provided, sorted: `test_selection.provides` plus the `pytest_cats_provides` hooks), `config_excluded` (one record per test held back, sorted by nodeid: `nodeid`, `standards`, `requires`, `kind` of `excluded` or `not_provided`, the matching `excluded_index`, `marker` and `value` or the `not_provided` requirements, and the `reason`), and `unmatched_exclusions` (the `test_selection.excluded` entries that held back no test, with their `index`). No field says whether the run was the whole suite; that depends on the repository and pipeline at that commit |
 | `counts` | object | `total` plus one integer per result, `not_run` included; `total` is the number of entries in `tests` |
 | `accounts` | array of `{account_name, account_id}` | Every keyname and account id pair that appears in `tests`, first-seen order; two keynames on one account id are two entries |

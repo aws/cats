@@ -31,7 +31,8 @@ class ReportDocument(TypedDict):
     it (additive fields do not move it), so a consumer can tell whether its reader still applies
     without parsing CATS's own version. ``run`` says who produced the evidence, when, from which
     config and command line, and what narrowed the run; ``tests`` is the evidence, sorted
-    by ``nodeid``. Query it with ``jq '.tests[]'``; gate CI on ``jq -e '.run.counts.failed == 0'``.
+    by ``nodeid``. Query it with ``jq '.tests[]'``. Gate CI on the exit status of ``cats test``,
+    not on this file: ``counts.failed`` is 0 for a setup error or a test pack that fails to import.
     """
 
     schema_version: int
