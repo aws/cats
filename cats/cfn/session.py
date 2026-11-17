@@ -56,6 +56,27 @@ def get_current_account_id() -> str:
         ) from e
 
 
+def require_caller_is_parent_account() -> None:
+    """Refuse a deploy whose test roles would trust an account other than the one running it.
+
+    The readiness gate assumes each test role from the caller's credentials, so a mismatch can
+    never pass the gate, and the roles it creates would trust the other account until destroyed.
+    An unset parent_account_id is left to render_template, which reports it on its own.
+    """
+    parent_account_id = Settings().cats_deployment_settings.parent_account_id
+    if parent_account_id is None:
+        return None
+    current_account_id = get_current_account_id()
+    if parent_account_id != current_account_id:
+        raise CatsConfigError(
+            f"cats_deployment_settings.parent_account_id is {parent_account_id}, "
+            + f"but 'cats infra deploy' is running as account {current_account_id} (the account 'aws sts get-caller-identity' reports). "
+            + "The test roles trust the parent account and the deploy assumes them from these credentials: "
+            + f"set parent_account_id to {current_account_id}, or deploy with credentials from account {parent_account_id}."
+        )
+    return None
+
+
 def get_deploy_session(account_name: str) -> boto3.Session:
     """Get boto3 session for an account, assuming role if needed.
 

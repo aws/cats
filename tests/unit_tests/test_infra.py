@@ -36,11 +36,14 @@ from cats.constants import LISTENER_READY_MARKER
 from cats.exceptions import CatsConfigError, CatsInfrastructureError
 from tests.utils import make_config, make_stack_tags, normalize_aws_ids, normalize_output, normalize_paths, patch_role_probe, write_config
 
+# The account the deploying credentials belong to. A deploy refuses a parent_account_id other than this one.
+CALLER_ACCOUNT_ID = "111111111111"
+
 
 @pytest.fixture(autouse=True)
 def mock_current_account(mocker: MockerFixture) -> MagicMock:
     """Mock get_current_account_id to return the test account."""
-    return mocker.patch("cats.cfn.session.get_current_account_id", return_value="111111111111")
+    return mocker.patch("cats.cfn.session.get_current_account_id", return_value=CALLER_ACCOUNT_ID)
 
 
 @pytest.fixture(autouse=True)
@@ -159,6 +162,7 @@ def _infra_config(mock_aws_infra: dict[str, str]) -> dict[str, object]:
     return make_config(
         network_targets={"private": {"vpc_id": mock_aws_infra["VPC"], "subnet_ids": [mock_aws_infra["SUBNET_A"]]}},
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
 
 
@@ -418,6 +422,7 @@ def test_deploy_all_deploys_multiple_accounts(
         accounts={"accountA": "111111111111", "accountB": "111111111111"},
         network_targets=network_targets,
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
     write_config(cats_yaml, config)
 
@@ -441,6 +446,7 @@ def test_deploy_all_closes_each_account_the_cycle_its_own_gate_finishes(
         accounts={"accountA": "111111111111", "accountB": "111111111111"},
         network_targets={"private": {"vpc_id": mock_aws_infra["VPC"], "subnet_ids": [mock_aws_infra["SUBNET_A"]]}},
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
     config["accounts_under_test"]["accountA"]["account_network_under_test"] = {}
     write_config(cats_yaml, config)
@@ -563,6 +569,7 @@ def test_deploy_hands_start_deploy_the_additional_role_arns_the_tests_will_assum
         network_targets={"private": {"vpc_id": mock_aws_infra["VPC"], "subnet_ids": [mock_aws_infra["SUBNET_A"]]}},
         additional_roles={"audit_only": {"managed_policies": ["SecurityAudit"]}, "readonly": {"managed_policies": ["ReadOnlyAccess"]}},
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
     write_config(cats_yaml, config)
     start_deploy = mocker.patch("cats.cli.infra.start_deploy", return_value=DeployResult(account_name="testaccount", success=True))
@@ -630,6 +637,57 @@ def test_deploy_rejects_oversized_template_before_touching_aws(
     assert (result.exit_code, result.stderr.splitlines()[-1], get_deploy_session.call_count) == (2, expected_stderr_line, 0)
 
 
+def test_deploy_with_parent_account_other_than_the_caller_exits_2_before_any_stack_call(
+    cats_yaml: Path,
+    mock_aws_infra: dict[str, str],
+    mock_cfn_success: MagicMock,
+    cli_runner: CliRunner,
+) -> None:
+    """Test roles trusting an account other than the deploying one could never pass the readiness gate: refuse before CreateStack."""
+    # arrange - 123456789012 is the placeholder cats init writes; the caller is CALLER_ACCOUNT_ID
+    config = make_config(
+        network_targets={"private": {"vpc_id": mock_aws_infra["VPC"], "subnet_ids": [mock_aws_infra["SUBNET_A"]]}},
+        allow_deploy_to_current_account=True,
+        parent_account_id="123456789012",
+    )
+    write_config(cats_yaml, config)
+    expected_stderr_line = (
+        "FAIL cats_deployment_settings.parent_account_id is 123456789012, but 'cats infra deploy' is running as account 111111111111 "
+        + "(the account 'aws sts get-caller-identity' reports). "
+        + "The test roles trust the parent account and the deploy assumes them from these credentials: "
+        + "set parent_account_id to 111111111111, or deploy with credentials from account 123456789012."
+    )
+
+    # act
+    result = cli_runner.invoke(cats_cli, ["infra", "deploy", "testaccount"])
+
+    # assert
+    assert (result.exit_code, result.stderr.splitlines()[-1:], mock_cfn_success.create_stack.call_count) == (2, [expected_stderr_line], 0)
+
+
+def test_deploy_all_with_parent_account_other_than_the_caller_exits_2_before_any_stack_call(
+    cats_yaml: Path,
+    mock_aws_infra: dict[str, str],
+    mock_cfn_success: MagicMock,
+    cli_runner: CliRunner,
+) -> None:
+    """The multi-account path refuses the same mismatch with the same exit code, and creates no stack in any account."""
+    # arrange
+    config = make_config(
+        accounts={"accountA": "111111111111", "accountB": "111111111111"},
+        network_targets={"private": {"vpc_id": mock_aws_infra["VPC"], "subnet_ids": [mock_aws_infra["SUBNET_A"]]}},
+        allow_deploy_to_current_account=True,
+        parent_account_id="123456789012",
+    )
+    write_config(cats_yaml, config)
+
+    # act
+    result = cli_runner.invoke(cats_cli, ["infra", "deploy", "--all"])
+
+    # assert
+    assert (result.exit_code, mock_cfn_success.create_stack.call_count) == (2, 0)
+
+
 def test_deploy_all_rejects_oversized_template_with_the_same_exit_code(
     cats_yaml: Path,
     mock_aws_infra: dict[str, str],
@@ -668,6 +726,7 @@ def test_deploy_two_named_accounts_deploys_both(
         accounts={"accountA": "111111111111", "accountB": "111111111111"},
         network_targets=network_targets,
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
     write_config(cats_yaml, config)
 
@@ -692,6 +751,7 @@ def test_deploy_all_one_account_start_failure_exits_1_without_traceback(
         accounts={"accountA": "111111111111", "accountB": "111111111111"},
         network_targets=network_targets,
         allow_deploy_to_current_account=True,
+        parent_account_id=CALLER_ACCOUNT_ID,
     )
     write_config(cats_yaml, config)
     real_start = infra_module._start_deploy_account
