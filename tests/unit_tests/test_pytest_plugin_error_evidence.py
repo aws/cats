@@ -15,7 +15,8 @@
 """Compliance evidence must record every test pytest reports, with the outcome pytest reports.
 
 Regression tests: errored tests once vanished from report.json, a teardown error was
-recorded as ``passed``, strict-xfail XPASS was recorded as ``xfailed``, a directly applied
+recorded as ``passed`` (and, after a skip or an expected failure, not at all),
+strict-xfail XPASS was recorded as ``xfailed``, a directly applied
 custom marker raised ``KeyError`` and dropped the entry, and a non-JSON metadata value
 truncated the whole evidence file at session end.
 """
@@ -26,6 +27,7 @@ from typing import Any
 import pytest
 import yaml
 
+from cats.report_run import ResultCounts
 from tests.utils import make_config
 
 
@@ -142,6 +144,302 @@ def test_passes_then_teardown_errors(broken_teardown):
         }
     ]
     assert expected == read_report(pytester)
+
+
+def read_counts(pytester: pytest.Pytester) -> ResultCounts:
+    """The ``run.counts`` block of report.json."""
+    counts: ResultCounts = json.loads((pytester.path / "report.json").read_text())["run"]["counts"]
+    return counts
+
+
+# A call-phase skip, then a fixture teardown that raises: pytest reports ``1 skipped, 1 error``.
+SKIP_THEN_TEARDOWN_ERRORS = """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+def test_skips_then_teardown_errors(broken_teardown):
+    pytest.skip("not today")
+"""
+
+
+def test_teardown_error_after_call_skip_upgrades_entry_to_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """pytest reports ``1 skipped, 1 error`` and exits 1; a ``skipped`` entry would hide the
+    failed cleanup from every reader of report.json. The skip reason is kept."""
+    # arrange
+    write_project(pytester, cats_config_content, SKIP_THEN_TEARDOWN_ERRORS)
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(skipped=1, errors=1)
+    expected: list[dict[str, Any]] = [
+        {
+            "result": "error",
+            "accounts_in_test": [],
+            "test_name": "test_skips_then_teardown_errors",
+            "nodeid": "test_teardown_error_after_call_skip_upgrades_entry_to_error.py::test_skips_then_teardown_errors",
+            "test_docstring": None,
+            "standards": [],
+            "standard_metadata": {},
+            "custom_markers": {},
+            "additional_metadata": {},
+            "xfail": False,
+            "error_message": "RuntimeError: teardown exploded",
+            "reason": "not today",
+        }
+    ]
+    assert expected == read_report(pytester)
+
+
+def test_teardown_error_after_call_skip_is_counted_as_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """``counts.error`` must count the teardown error, as pytest's summary does."""
+    # arrange
+    write_project(pytester, cats_config_content, SKIP_THEN_TEARDOWN_ERRORS)
+
+    # act
+    pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    expected: ResultCounts = {"total": 1, "passed": 0, "failed": 0, "error": 1, "skipped": 0, "xfailed": 0, "xpassed": 0, "not_run": 0}
+    assert expected == read_counts(pytester)
+
+
+def test_teardown_error_after_marker_skip_upgrades_entry_to_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """The entry of a marker-skipped test was recorded in the setup phase. A module-scoped
+    fixture (the shape of an account fixture) tears down after the last test that used it,
+    which may be that skipped test; its error must land on the entry all the same."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture(scope="module")
+def module_broken_teardown():
+    yield "value"
+    raise RuntimeError("module teardown exploded")
+
+def test_first(module_broken_teardown):
+    assert True
+
+@pytest.mark.skip(reason="account not deployed")
+def test_last_is_skipped(module_broken_teardown):
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(passed=1, skipped=1, errors=1)
+    entries = read_report(pytester)
+    expected = [
+        ("test_first", "passed", None, None),
+        ("test_last_is_skipped", "error", "RuntimeError: module teardown exploded", "account not deployed"),
+    ]
+    assert expected == [(entry["test_name"], entry["result"], entry["error_message"], entry["reason"]) for entry in entries]
+
+
+def test_teardown_error_after_imperative_xfail_upgrades_entry_to_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """pytest reports ``1 xfailed, 1 error`` and exits 1; the entry must say so."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+def test_xfails_then_teardown_errors(broken_teardown):
+    pytest.xfail("known broken")
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xfailed=1, errors=1)
+    expected: list[dict[str, Any]] = [
+        {
+            "result": "error",
+            "accounts_in_test": [],
+            "test_name": "test_xfails_then_teardown_errors",
+            "nodeid": "test_teardown_error_after_imperative_xfail_upgrades_entry_to_error.py::test_xfails_then_teardown_errors",
+            "test_docstring": None,
+            "standards": [],
+            "standard_metadata": {},
+            "custom_markers": {},
+            "additional_metadata": {},
+            "xfail": True,
+            "error_message": "RuntimeError: teardown exploded",
+            "reason": "known broken",
+        }
+    ]
+    assert expected == read_report(pytester)
+
+
+def test_teardown_error_not_matching_xfail_raises_upgrades_xfailed_entry_to_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """Under an xfail marker pytest excuses a raising teardown only when ``raises=`` matches it;
+    here it does not, so pytest reports ``1 xfailed, 1 error`` and the entry must be an error."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+@pytest.mark.xfail(raises=ValueError, reason="known broken")
+def test_fails_as_expected_then_teardown_errors(broken_teardown):
+    raise ValueError("expected")
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xfailed=1, errors=1)
+    entries = read_report(pytester)
+    expected = ("error", "RuntimeError: teardown exploded", "known broken", True)
+    assert expected == (entries[0]["result"], entries[0]["error_message"], entries[0]["reason"], entries[0]["xfail"])
+
+
+def test_teardown_error_not_matching_xfail_raises_upgrades_xpassed_entry_to_error(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """An unexpected pass is passing evidence; like ``passed``, it must not stand with a broken teardown behind it."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+@pytest.mark.xfail(raises=ValueError)
+def test_passes_unexpectedly_then_teardown_errors(broken_teardown):
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xpassed=1, errors=1)
+    entries = read_report(pytester)
+    expected = ("error", "RuntimeError: teardown exploded")
+    assert expected == (entries[0]["result"], entries[0]["error_message"])
+
+
+def test_teardown_error_under_xfail_marker_is_recorded_as_xfailed(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """Without ``raises=``, pytest itself reports a raising teardown under an xfail marker as
+    a second XFAIL, not as an error, and exits 0. CATS records the outcome pytest reports."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+@pytest.mark.xfail(reason="known broken")
+def test_fails_as_expected_then_teardown_raises(broken_teardown):
+    raise ValueError("expected")
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xfailed=2)
+    entries = read_report(pytester)
+    expected = (1, "xfailed", None, "known broken")
+    assert expected == (len(entries), entries[0]["result"], entries[0]["error_message"], entries[0]["reason"])
+
+
+def test_teardown_error_under_xfail_marker_after_unexpected_pass_is_recorded_as_xpassed(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """The same excuse after an unexpected pass: pytest reports ``1 xpassed, 1 xfailed``, no error,
+    exit 0. The entry stays ``xpassed``, as pytest reports it; the teardown error is in pytest's output alone."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+@pytest.mark.xfail(reason="known broken")
+def test_passes_unexpectedly_then_teardown_raises(broken_teardown):
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(xpassed=1, xfailed=1)
+    entries = read_report(pytester)
+    expected = (1, "xpassed", None)
+    assert expected == (len(entries), entries[0]["result"], entries[0]["error_message"])
+
+
+def test_teardown_error_after_failed_call_keeps_the_failure(pytester: pytest.Pytester, cats_config_content: str) -> None:
+    """pytest reports ``1 failed, 1 error``; the control's own failure is the stronger evidence and keeps its message."""
+    # arrange
+    write_project(
+        pytester,
+        cats_config_content,
+        """
+import pytest
+
+@pytest.fixture
+def broken_teardown():
+    yield "value"
+    raise RuntimeError("teardown exploded")
+
+def test_fails_then_teardown_errors(broken_teardown):
+    assert False
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+
+    # assert
+    result.assert_outcomes(failed=1, errors=1)
+    entries = read_report(pytester)
+    expected = ("failed", "assert False")
+    assert expected == (entries[0]["result"], entries[0]["error_message"])
 
 
 def test_strict_xfail_xpass_is_recorded_as_failed(pytester: pytest.Pytester, cats_config_content: str) -> None:

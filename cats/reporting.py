@@ -223,9 +223,11 @@ class ReportEntry(TypedDict):
     collide across files.
 
     ``result: "error"`` records a test whose setup or teardown raised: a fixture
-    error before the test body ran, or a teardown failure after it passed (the
-    entry recorded at call time is upgraded, so a broken teardown can never
-    stand as passing evidence).
+    error before the test body ran, or a teardown failure after a call that passed,
+    skipped or was an expected failure (the entry recorded at call time is upgraded
+    and takes the teardown's message, so a broken teardown can never stand as
+    passing evidence or hide behind a skip; its ``reason`` is kept). After a failed
+    call the entry stays ``failed`` with the call's message.
 
     ``result: "not_run"`` records a test ``test_selection`` in cats.yaml held back: it
     requires something the deployment does not provide, or it matches an ``excluded``
@@ -238,7 +240,8 @@ class ReportEntry(TypedDict):
     - ``error_message``: the failure or error message when ``result`` is
       ``"failed"`` or ``"error"``, else ``null``.
     - ``reason``: the skip or xfail reason when ``result`` is ``"skipped"`` or
-      ``"xfailed"``, the exclusion reason when it is ``"not_run"``, else ``null``.
+      ``"xfailed"`` (kept when a teardown error turns such an entry ``"error"``), the
+      exclusion reason when it is ``"not_run"``, else ``null``.
     - ``standard_metadata``: per-standard decorator metadata keyed by standard
       name, values of the shape ``{"control_ids": list[str], "control_group":
       str | None}``; ``{}`` when the test carries no standard.

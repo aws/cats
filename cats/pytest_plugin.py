@@ -667,17 +667,26 @@ def _json_safe(entry: ReportEntry) -> ReportEntry:
 
 
 def _record_teardown_error(item: pytest.Function, phase_report: pytest.TestReport) -> None:
-    """A teardown failure is an ERROR in pytest's summary: the entry recorded at call
-    time must not stand as passing evidence."""
+    """A teardown failure is an ERROR in pytest's summary, whatever the earlier phases said.
+
+    The entry already recorded for the test becomes ``error`` and carries the teardown's
+    message: a ``passed`` or ``xpassed`` entry must not stand as passing evidence, and a
+    ``skipped`` or ``xfailed`` one must not hide the error, which is how a reader of
+    report.json learns that cleanup failed (a test role or bucket left behind) in a run
+    pytest exited 1 on. The skip or xfail ``reason`` stays on the entry. A ``failed`` or
+    ``error`` entry keeps its own message: the control's failure, or the setup error the
+    teardown error most likely follows from, is the stronger evidence.
+    """
     entry = _entries_by_nodeid.get(item.nodeid)
     if entry is None:
         _record_entry(item, phase_report)
-        return
-    if entry["result"] == "passed":
-        entry["result"] = "error"
-        error_message = _extract_error_message(phase_report)
-        if error_message is not None:
-            entry["error_message"] = error_message
+        return None
+    if entry["result"] in ("failed", "error"):
+        return None
+    entry["result"] = "error"
+    error_message = _extract_error_message(phase_report)
+    if error_message is not None:
+        entry["error_message"] = error_message
 
 
 def _record_junit_properties(item: pytest.Function, entry: ReportEntry) -> None:
@@ -757,8 +766,8 @@ def pytest_runtest_makereport(
     Pytest hook that runs AFTER each test phase completes.
 
     Every phase that carries evidence is recorded: a setup skip or error, the call
-    itself, and a teardown failure (which upgrades a passed entry to an error, since
-    pytest reports that test as ERROR).
+    itself, and a teardown failure (which turns the entry recorded so far into an error,
+    since pytest reports that test as ERROR; see _record_teardown_error).
 
     CRITICAL: This is a wrapper hook. Code after 'yield' runs post-test.
     Any exception after yield will lose the test report unless caught.

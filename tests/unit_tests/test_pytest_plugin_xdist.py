@@ -61,6 +61,9 @@ def broken_teardown():
 def test_teardown_errors(broken_teardown):
     assert True
 
+def test_skips_then_teardown_errors(broken_teardown):
+    pytest.skip("not today")
+
 @pytest.fixture
 def broken_fixture():
     raise RuntimeError("fixture exploded")
@@ -73,14 +76,15 @@ def test_setup_errors(broken_fixture):
     # act
     result = pytester.runpytest_subprocess("-n", "2", "-p", "no:randomly")
 
-    # assert - pytest counts a teardown error as both a pass (the call) and an error
-    result.assert_outcomes(passed=2, failed=1, errors=2)
+    # assert - pytest counts a teardown error as both the call's outcome (a pass, a skip) and an error
+    result.assert_outcomes(passed=2, failed=1, skipped=1, errors=3)
     entries: list[dict[str, Any]] = json.loads((pytester.path / "report.json").read_text())["tests"]
     by_name = {entry["test_name"]: (entry["result"], entry.get("error_message")) for entry in entries}
     expected = {
         "test_passes": ("passed", None),
         "test_fails": ("failed", "assert False"),
         "test_teardown_errors": ("error", "RuntimeError: teardown exploded"),
+        "test_skips_then_teardown_errors": ("error", "RuntimeError: teardown exploded"),
         "test_setup_errors": ("error", "RuntimeError: fixture exploded"),
     }
     assert expected == by_name

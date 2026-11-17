@@ -123,13 +123,22 @@ object), never an absent key, so entries always have the same columns.
 | `additional_metadata` | object | Data added via `cats_report.add_report_metadata`; `{}` when none |
 | `xfail` | bool | Whether the test was marked or imperatively declared expected-to-fail |
 | `error_message` | string or null | The failure or error message when `result` is `failed` or `error` |
-| `reason` | string or null | The skip or xfail reason when `result` is `skipped` or `xfailed`; the exclusion's reason, or the gap (`requires {a, b}; not provided {b}`), when it is `not_run` |
+| `reason` | string or null | The skip or xfail reason when `result` is `skipped` or `xfailed` (kept when a teardown error turns such an entry `error`); the exclusion's reason, or the gap (`requires {a, b}; not provided {b}`), when it is `not_run` |
 | `duration_s` | number | Wall-clock seconds of the phase recorded (the test call, or setup for a setup skip or error); `0.0` for `not_run` |
 | `recorded_at` | string | When the entry was recorded: RFC 3339 UTC, microsecond precision, `Z` suffix |
 
 A `result` of `error` records a test whose setup or teardown raised: a fixture error
-before the test body ran, or a teardown failure after it passed (the entry is upgraded,
-so a broken teardown never stands as passing evidence).
+before the test body ran, or a teardown failure after a call that passed, skipped or was
+an expected failure. pytest reports that test as ERROR and exits 1; the entry is upgraded
+and takes the teardown's `error_message`, so a broken teardown never stands as passing
+evidence and never hides behind a skip, and `counts.error` counts it as pytest's summary
+does. A skip or xfail `reason` is kept on the upgraded entry (in report.json and the
+Security Hub `cats/reason` field; an OSCAL finding's remarks show the `error_message`).
+After a failed call the entry stays `failed` with the call's message, and after a setup
+error it keeps that error: the stronger evidence in each case, and the teardown error is in
+pytest's output alone. A teardown that raises under an `xfail` marker (with no `raises=`,
+or one the exception matches) is an expected failure to pytest, not an error: the entry
+stays `xfailed`, or `xpassed` after an unexpected pass, as pytest reports it.
 
 A `result` of `not_run` records a test [`test_selection`](../guides/configuration.md#test-selection) held
 back: it requires something the deployment does not provide, or it matches an `excluded`
