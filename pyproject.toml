@@ -184,7 +184,7 @@ dependencies = [
     "typing-extensions<5.0.0,>=4.6.1",
 ]
 name = "aws-cats"
-version = "1.0.0"
+version = "1.1.0"
 description = "Control Acceptance Testing Suite: test AWS controls, network paths, and account behavior across many accounts with pytest and ephemeral test infrastructure."
 readme = "README.md"
 keywords = ["aws", "testing", "pytest", "compliance", "security", "controls", "multi-account", "cloudformation"]
