@@ -31,7 +31,7 @@ from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionEr
 from moto import mock_aws
 from pytest_mock import MockerFixture
 
-from cats.cfn.session import BOTO_RETRY_CONFIG
+from cats.boto_config import BOTO_RETRY_CONFIG
 from cats.config import SecurityHubSeverity
 from cats.exceptions import CatsInfrastructureError
 from cats.report_writers.securityhub import AccountFindings, FindingContext, SecurityHubDelivery, build_account_findings, import_findings

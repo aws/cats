@@ -457,7 +457,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: arn:aws:iam::999999999999:root
+              AWS: arn:aws:iam::111111111111:root
             Action:
               - sts:AssumeRole
               - sts:TagSession

@@ -163,18 +163,18 @@ def lookup_udp_receipt_token(dns_name: str) -> str | None:
     return _udp_receipt_tokens.get(dns_name)
 
 
-def _udp_wire_message(host: str, correlation_id: str) -> str:
+def _udp_wire_message(host: str, token: str | None, correlation_id: str) -> str:
     """The datagram for a CATS listener: its account's receipt token, then the correlation id.
 
     The token is what the listener checks before it records a receipt, and it is known once
-    the listener's account has been constructed. A host with no known token gets the bare
-    correlation id, which is right for a target that is not a CATS listener and is logged at
-    WARNING because a CATS listener would drop it and receive_s3 would then read False.
+    the listener's account has been constructed. A host with no known token gets the
+    correlation id alone, which is right for a target that is not a CATS listener and is
+    logged at WARNING because a CATS listener would drop it. The result then records that no
+    token was carried, and receive_s3 refuses it rather than read the dropped datagram as False.
     """
-    token = lookup_udp_receipt_token(host)
     if token is None:
         logger.warning(
-            "No receipt token is known for %s, so the datagram is sent bare. If this is a CATS listener, name its account "
+            "No receipt token is known for %s, so the datagram is sent without one. If this is a CATS listener, name its account "
             + "first (in pytest, request that account's fixture; in cats run or MCP, pass the receiving account); "
             + "otherwise ignore this.",
             host,
@@ -355,9 +355,14 @@ class NetworkHandler:
             bool: True if the receipt exists, False if it did not appear within timeout
 
         Raises:
-            CatsUsageError: If `sent` is not a UDP result, or the datagram never left the
-                host (response is not SENT). A DNS_FAILURE is not "dropped in flight",
-                so it must not be allowed to read as False.
+            CatsUsageError: A result that must not be allowed to read as False:
+                - `sent` is not a UDP result (no correlation_id).
+                - The datagram never left the host (response is not SENT). A DNS_FAILURE is
+                  not "dropped in flight".
+                - The datagram left without the listener's receipt token: the listener was
+                  addressed by something other than its ec2_dns_name, or its account had not
+                  been constructed when udp_call ran, so no token was registered. CATS's own
+                  listener discards such a datagram, which says nothing about the network.
             CatsInfrastructureError: The response bucket cannot be read (missing bucket,
                 access denied): a receipt that cannot be checked must not read as False.
         """
@@ -365,6 +370,14 @@ class NetworkHandler:
             raise CatsUsageError(f"receive_s3 needs the result of a udp_call; {sent!r} carries no correlation_id")
         if sent.response is not CatsNetworkResponse.SENT:
             raise CatsUsageError(f"receive_s3 needs a SENT result; the datagram never left the host: {sent!r}")
+        if sent._receipt_token_carried is False:
+            raise CatsUsageError(
+                f"receive_s3 needs a datagram that carried the receipt token; the one with correlation_id {sent.correlation_id!r} went "
+                + "without one, because no token was registered for the host you passed to udp_call. A CATS listener drops such a "
+                + "datagram, so False here would not be evidence that the network dropped it. Address the listener by its ec2_dns_name, "
+                + "and make sure the receiving account was constructed before udp_call ran (in pytest, the test requests that account's "
+                + "fixture): that is what registers the token. For a target that is not a CATS listener, do not call receive_s3."
+            )
         return self._receive_s3_by_id(sent.correlation_id, timeout, interval)
 
     def _receive_s3_by_id(self, correlation_id: str, timeout: float = 10.0, interval: float = 2.0) -> bool:
@@ -498,11 +511,12 @@ class NetworkHandler:
         return self._udp_call(self._lambda_probe, host, port)
 
     def _udp_call(self, transport: ProbeTransport, host: str, port: int) -> CatsNetworkResult:
-        """Generate the receipt ID, send the token-prefixed datagram, and attach the ID to the result."""
+        """Generate the receipt ID, send the token-prefixed datagram, and attach the ID (and whether a token was carried) to the result."""
         correlation_id = str(uuid.uuid4())
         _validate_correlation_id(correlation_id)
-        result = transport("udp", host, port, _udp_wire_message(host, correlation_id))
-        return replace(result, correlation_id=correlation_id)
+        token = lookup_udp_receipt_token(host)
+        result = transport("udp", host, port, _udp_wire_message(host, token, correlation_id))
+        return replace(result, correlation_id=correlation_id, _receipt_token_carried=token is not None)
 
     # =========================================================================
     # EC2 Handler Methods (via SSM RunCommand)

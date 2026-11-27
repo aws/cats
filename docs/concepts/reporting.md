@@ -20,7 +20,9 @@ def test_ebs_encryption_by_default(account: str, get_account_fixture: GetAccount
 ```
 
 A parametrized test that runs across twenty accounts is twenty claims, each attributed to its
-account. One test that takes two account fixtures is one claim attributed to both. The report
+account. One test that takes two account fixtures is one claim attributed to both. A test that
+loops over resources with pytest's `subtests` fixture is one claim per resource, plus the test
+itself. The report
 entry for each carries the standard, the accounts, the outcome and the test's docstring:
 
 ```json

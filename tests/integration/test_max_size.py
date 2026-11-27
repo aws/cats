@@ -41,8 +41,8 @@ def deployed_max_size_stack(
 
 
 @skip_wrong_account
-def test_max_size_stack_deploys_successfully(deployed_max_size_stack: AccountUnderTest) -> None:
-    """Stack with 3 targets and ec2+lambda deploys without exceeding 51KB limit."""
+def test_max_size_stack_deploys_successfully(deployed_max_size_stack: AccountUnderTest, subtests: pytest.Subtests) -> None:
+    """Stack with 3 targets and ec2+lambda deploys without exceeding 51KB limit; one block per target."""
     # act
     targets = deployed_max_size_stack.available_network_targets
 
@@ -50,11 +50,12 @@ def test_max_size_stack_deploys_successfully(deployed_max_size_stack: AccountUnd
     expected_targets = ["target0", "target1", "target2"]
     assert targets == expected_targets
     for target_name in expected_targets:
-        handler = getattr(deployed_max_size_stack, target_name)
-        assert handler._deployed.enabled_handlers == ["ec2", "lambda"]
-        assert handler._deployed.lambda_ is not None
-        assert isinstance(handler._deployed.ec2.instance_id, str)
-        assert len(handler._deployed.ec2.instance_id) > 0
+        with subtests.test(msg=target_name):
+            handler = getattr(deployed_max_size_stack, target_name)
+            assert handler._deployed.enabled_handlers == ["ec2", "lambda"]
+            assert handler._deployed.lambda_ is not None
+            assert isinstance(handler._deployed.ec2.instance_id, str)
+            assert len(handler._deployed.ec2.instance_id) > 0
 
 
 @skip_wrong_account

@@ -41,28 +41,30 @@ def deployed_parallel_stacks(
 
 
 @skip_wrong_account
-def test_parallel_stacks_create_successfully(deployed_parallel_stacks: list[str]) -> None:
-    """Parallel stacks deploy with CREATE_COMPLETE status."""
+def test_parallel_stacks_create_successfully(deployed_parallel_stacks: list[str], subtests: pytest.Subtests) -> None:
+    """Parallel stacks deploy with CREATE_COMPLETE status; one block per account, so a failure names the stack."""
     # arrange
     session = boto3.Session(region_name=REGION)
     expected_status = "CREATE_COMPLETE"
 
     # act / assert
     for account_keyname in deployed_parallel_stacks:
-        stack_name = get_stack_name(STACK_PREFIX, account_keyname)
-        status = get_stack_status(session, stack_name, REGION)
-        assert status == expected_status
+        with subtests.test(msg=account_keyname):
+            stack_name = get_stack_name(STACK_PREFIX, account_keyname)
+            status = get_stack_status(session, stack_name, REGION)
+            assert status == expected_status
 
 
 @skip_wrong_account
-def test_parallel_accounts_have_independent_sessions(deployed_parallel_stacks: list[str]) -> None:
-    """Each parallel account has a working session with correct identity."""
+def test_parallel_accounts_have_independent_sessions(deployed_parallel_stacks: list[str], subtests: pytest.Subtests) -> None:
+    """Each parallel account has a working session with correct identity; one block per account."""
     # act / assert
     for account_keyname in deployed_parallel_stacks:
-        account = AccountUnderTest(account_keyname)
-        identity = account.session.client("sts").get_caller_identity()
-        assert identity["Account"] == ACCOUNT_ID
-        assert account_keyname in identity["Arn"]
+        with subtests.test(msg=account_keyname):
+            account = AccountUnderTest(account_keyname)
+            identity = account.session.client("sts").get_caller_identity()
+            assert identity["Account"] == ACCOUNT_ID
+            assert account_keyname in identity["Arn"]
 
 
 @skip_wrong_account

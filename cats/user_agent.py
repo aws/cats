@@ -30,6 +30,7 @@ import boto3
 import botocore.session
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
+from cats.boto_config import BOTO_RETRY_CONFIG
 from cats.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -122,9 +123,15 @@ def user_agent_extra() -> str:
 
 
 def attributed_botocore_session() -> botocore.session.Session:
-    """A botocore session stamped with :func:`user_agent_extra`. Every CATS session is built from one."""
+    """A botocore session stamped with :func:`user_agent_extra`, whose clients carry :data:`~cats.boto_config.BOTO_RETRY_CONFIG`.
+
+    Every CATS session is built from one, so every client CATS builds has the retry policy without
+    passing ``config=``. A caller's own ``config=`` is merged over the default per top-level
+    option: ``connect_timeout`` composes with it, ``retries`` replaces it.
+    """
     botocore_session = botocore.session.get_session()
     botocore_session.user_agent_extra = user_agent_extra()
+    botocore_session.set_default_client_config(BOTO_RETRY_CONFIG)
     return botocore_session
 
 

@@ -7,9 +7,12 @@ is the idea behind them.
 ## `report.json`
 
 The file is a JSON object with three keys: `schema_version`, the shape of this document;
-`run`, the provenance of the evidence; and `tests`, one entry per test sorted by `nodeid`.
-Query the entries with `jq '.tests[]'`; gate a pipeline with
-`jq -e '.run.counts.failed == 0' report.json`.
+`run`, the provenance of the evidence; and `tests`, one entry per test (and per
+[subtest](#subtests)) sorted by `nodeid`. Query the entries with `jq '.tests[]'`. Gate a
+pipeline on the exit status of `cats test`, which is non-zero for a failed test, a setup or
+teardown error, a test pack that fails to import, and a failed report writer. The file is
+evidence, not a gate: `counts.failed` is 0 for a setup error (counted under `error`) and for
+an import failure (no entries at all).
 
 `schema_version` is `1` and moves only with a breaking change to the document; new fields
 are added without moving it, so a consumer checks one integer to know whether its reader
@@ -20,7 +23,8 @@ basic form a filename can carry.
 The entry key is pytest's `nodeid`, relative to pytest's rootdir. `cats init` pins that
 rootdir at the project root (`[tool.pytest.ini_options]` in an existing `pyproject.toml`,
 else `pytest.ini`), so the same test has the same `nodeid`, and therefore the same OSCAL and
-Security Hub identifiers, however pytest is invoked.
+Security Hub identifiers, however pytest is invoked. A [subtest's](#subtests) entry extends
+its test's `nodeid` with the block's description; `subtest.of` holds the pytest node id.
 
 ```json
 {
@@ -96,7 +100,7 @@ Security Hub identifiers, however pytest is invoked.
 | `aws_region` | string or null | `cats_deployment_settings.aws_region` after the `AWS_REGION` fallback; `null` when the run had no Region configured |
 | `partition` | string | `cats_deployment_settings.partition`, derived from the Region when unset. With `aws_region` and `cfn_stack_prefix`, an input to every deployed role name and Security Hub finding `Id` |
 | `cfn_stack_prefix` | string | `cats_deployment_settings.cfn_stack_prefix` |
-| `exit_status` | integer | pytest's exit code |
+| `exit_status` | integer | pytest's exit code when the report was assembled, before the writers ran: `1` for a failed test or a setup or teardown error, `2` for a collection error. A failed writer also exits the process with `1` but shows here as `0`; read `writers` for it |
 | `selection` | object | What narrowed the run, as a record. The command-line selectors: `keyword` (`-k`), `markexpr` (`-m`), `last_failed` (`--lf`), `deselect`, `explicit_args` (the paths or node ids on the command line), `stopped_early` (why the run stopped before the last test, or `""`). Then what `test_selection` decided: `provided` (every requirement the run provided, sorted: `test_selection.provides` plus the `pytest_cats_provides` hooks), `config_excluded` (one record per test held back, sorted by nodeid: `nodeid`, `standards`, `requires`, `kind` of `excluded` or `not_provided`, the matching `excluded_index`, `marker` and `value` or the `not_provided` requirements, and the `reason`), and `unmatched_exclusions` (the `test_selection.excluded` entries that held back no test, with their `index`). No field says whether the run was the whole suite; that depends on the repository and pipeline at that commit |
 | `counts` | object | `total` plus one integer per result, `not_run` included; `total` is the number of entries in `tests` |
 | `accounts` | array of `{account_name, account_id}` | Every keyname and account id pair that appears in `tests`, first-seen order; two keynames on one account id are two entries |
@@ -113,7 +117,7 @@ object), never an absent key, so entries always have the same columns.
 | `result` | `"passed" \| "failed" \| "skipped" \| "xpassed" \| "xfailed" \| "error" \| "not_run"` | The outcome pytest reports, or `not_run` for a test `test_selection` held back |
 | `accounts_in_test` | array of `{account_name, account_id, tags}` | Every account fixture the test used; a tag declared without a value has `null` |
 | `test_name` | string | pytest's item name: the function name plus the parametrize id, e.g. `test_ssh_closed[prod_account]` (can collide across files; use `nodeid` as the key) |
-| `nodeid` | string | The pytest node id — unique per test, includes parametrize ids |
+| `nodeid` | string | The pytest node id — unique per test, includes parametrize ids. On a [subtest's](#subtests) entry, the test's node id followed by the block's description; `subtest.of` is the node id itself |
 | `test_docstring` | string or null | The test's docstring |
 | `standards` | array of strings | `standard_name`s from `@cats`, outermost scope first, deduplicated |
 | `standard_metadata` | object | Per-standard `{control_ids, control_group}` from `@cats`, keyed by standard name; `{}` without standards |
@@ -121,13 +125,23 @@ object), never an absent key, so entries always have the same columns.
 | `additional_metadata` | object | Data added via `cats_report.add_report_metadata`; `{}` when none |
 | `xfail` | bool | Whether the test was marked or imperatively declared expected-to-fail |
 | `error_message` | string or null | The failure or error message when `result` is `failed` or `error` |
-| `reason` | string or null | The skip or xfail reason when `result` is `skipped` or `xfailed`; the exclusion's reason, or the gap (`requires {a, b}; not provided {b}`), when it is `not_run` |
+| `reason` | string or null | The skip or xfail reason when `result` is `skipped` or `xfailed` (kept when a teardown error turns such an entry `error`); the exclusion's reason, or the gap (`requires {a, b}; not provided {b}`), when it is `not_run` |
 | `duration_s` | number | Wall-clock seconds of the phase recorded (the test call, or setup for a setup skip or error); `0.0` for `not_run` |
 | `recorded_at` | string | When the entry was recorded: RFC 3339 UTC, microsecond precision, `Z` suffix |
+| `subtest` | object or null | On a [subtest's](#subtests) entry: `of` (the test's `nodeid`), `msg` and `context`. `null` on every other entry |
 
 A `result` of `error` records a test whose setup or teardown raised: a fixture error
-before the test body ran, or a teardown failure after it passed (the entry is upgraded,
-so a broken teardown never stands as passing evidence).
+before the test body ran, or a teardown failure after a call that passed, skipped or was
+an expected failure. pytest reports that test as ERROR and exits 1; the entry is upgraded
+and takes the teardown's `error_message`, so a broken teardown never stands as passing
+evidence and never hides behind a skip, and `counts.error` counts it as pytest's summary
+does. A skip or xfail `reason` is kept on the upgraded entry (in report.json and the
+Security Hub `cats/reason` field; an OSCAL finding's remarks show the `error_message`).
+After a failed call the entry stays `failed` with the call's message, and after a setup
+error it keeps that error: the stronger evidence in each case, and the teardown error is in
+pytest's output alone. A teardown that raises under an `xfail` marker (with no `raises=`,
+or one the exception matches) is an expected failure to pytest, not an error: the entry
+stays `xfailed`, or `xpassed` after an unexpected pass, as pytest reports it.
 
 A `result` of `not_run` records a test [`test_selection`](../guides/configuration.md#test-selection) held
 back: it requires something the deployment does not provide, or it matches an `excluded`
@@ -143,6 +157,49 @@ The report writers themselves (the `ReportWriter` protocol and its registry in
 `cats.report_writers`) are internal too: there is no supported way to add a report format in
 1.x, and `report_formats` accepts only the four values above. To produce another format,
 consume `report.json` from your own tooling.
+
+#### Subtests
+
+Each `subtests.test()` block gets its own entry, and so does the test itself. A block's
+`nodeid` is the test's `nodeid` followed by the block's description as pytest prints it:
+
+```json
+{
+  "nodeid": "tests/test_s3.py::test_buckets [bucket-a] (region='us-east-1')",
+  "result": "failed",
+  "subtest": { "of": "tests/test_s3.py::test_buckets", "msg": "bucket-a", "context": { "region": "'us-east-1'" } }
+}
+```
+
+- A block's entry has the test's standards, markers and docstring, and the accounts and
+  `additional_metadata` the test had registered by the time the block ended. An account added
+  with `cats_report.add_account()` after a block is not on that block's entry; one added before
+  the loop is on every block's. For a loop that resolves a different account per block, give the
+  accounts to the test as fixture parameters, which are on every entry.
+- The test's own entry has the result pytest gives it. If the test body passed but a block
+  failed, pytest fails the test with `contains 1 failed subtest`, and so does the entry. This
+  holds whatever failed the block: an assertion, or CATS being unable to record it (below).
+- `run.counts` matches pytest's summary, so a failed block and its test count as two failures.
+  To list the tests alone, use `jq '[.tests[] | select(.subtest == null)]'`.
+- A test rerun by [pytest-rerunfailures](https://pypi.org/project/pytest-rerunfailures/) has
+  entries for its last attempt only, blocks included, as pytest's summary counts it; `nodeid`
+  stays unique, so a Security Hub finding or OSCAL observation is never written twice in one run.
+- `context` holds the block's keyword arguments as pytest prints them, cut at 240 characters.
+  Put the resource name or ARN in `msg`, which is kept exactly. `msg` must be a string or
+  `None`; any other value fails the block with the culprit named, and that entry's `msg` is the
+  value's text. A `msg` that has no text (its `__str__` raises) fails pytest's own status line
+  as well as the block; its entry is described as `[<undescribed subtest>]`, the one description
+  CATS supplies rather than copies from pytest, with `msg` `null`.
+- The description is the block's identity: the Security Hub finding `Id` and the OSCAL uuids
+  derive from the `nodeid` it forms. It must be unique within the test and the same from run
+  to run. A second block with a description already used in the test fails, with the fix named;
+  its entry carries ` #2` so no two entries share a `nodeid`, and that suffix appears on no
+  other entry. A block with neither `msg` nor keyword arguments is described as `(<subtest>)`,
+  so only one such block can exist in a test. An entry that failed this way is still a block's:
+  its `subtest` key names the test, and its Security Hub finding carries `cats/subtest_of`. If
+  the block had also failed on its own, `error_message` holds that failure first and the
+  reporting error after it. The test fails as it does for any failed block, and `-x` stops on
+  it.
 
 ### Verifying a report
 
@@ -329,6 +386,10 @@ testcase itself: the same `classname`, `name` and `file`, `time="0.000"`, the sa
 tells it apart from `pytest.skip` and `pytest.xfail`, and it counts in the testsuite's `tests` and `skipped` totals
 like any skip.
 
+A test with [subtests](#subtests) is one testcase in `junit.xml`, as pytest writes it, with a `<failure>` or
+`<skipped>` element for each failed or skipped block. Passing blocks don't appear there; `report.json`, OSCAL and
+Security Hub have an entry for every block.
+
 ## Security Hub findings
 
 ### What a finding looks like
@@ -346,7 +407,7 @@ keys and the `Compliance.Status`/`RecordState` mapping are; `Types` and the seve
 |---|---|
 | `Id` | `cats/<cfn_stack_prefix><account keyname>/<cats_deployment_settings.aws_region>/<uuid5 of the node id>`: stable across runs, so a re-run updates the finding in place; namespaced so two CATS projects testing one account, or one suite run against two Regions, do not collide |
 | `Title` / `Description` | the test name / its docstring (whitespace collapsed), else the test name |
-| `GeneratorId` | the pytest node id |
+| `GeneratorId` | the entry's `nodeid` (the pytest node id; for a subtest, with the block's description appended) |
 | `Types` | `Software and Configuration Checks/Industry and Regulatory Standards/<standard>` per `@cats` standard, or `.../CATS` when the test has none |
 | `Compliance.RelatedRequirements` | each standard, then its control ids resolved the same way the OSCAL writer resolves them (decorator, then `pytest_cats_standards` registry) |
 | `Resources` | the account (`AWS::::Account:<id>`) in the Region the stack deploys into, with its `cats.yaml` tags |
@@ -394,7 +455,9 @@ enable `securityhub` only where that audience is the intended one.
 
 #### What each finding carries
 
-- `GeneratorId` and `ProductFields["cats/nodeid"]`: the test's node id.
+- `GeneratorId` and `ProductFields["cats/nodeid"]`: the entry's `nodeid` (the test's node id; for a
+  [subtest](#subtests), the node id followed by the block's description).
+- `ProductFields["cats/subtest_of"]`: on a subtest's finding, the node id of its test; absent otherwise.
 - `Title`: the test name (`test_name`, function name plus parametrize id).
 - `Description`: the test's docstring with whitespace collapsed, else the test name.
 - `ProductFields["cats/error_message"]`: the assertion or error text of a failed test, truncated to 2048 characters.
@@ -418,6 +481,12 @@ drops marker and metadata pairs, never a CATS field.
 
 In a cross-account test the same finding, error text included, is imported into every account named in
 `accounts_in_test`, so each of those accounts' Security Hub readers sees what the test observed about the others.
+
+A test with [subtests](#subtests) is one finding per block plus one for the test, as pytest counts
+them. A failed block is therefore two `ACTIVE` findings: the block's, naming the resource, and the
+test's, whose description is `contains 1 failed subtest`. The test's finding is kept because the test
+body is a claim of its own (it may assert the population, or anything else) and because its `Id` is
+the one that tracked the test before it used subtests. `cats/subtest_of` tells the two apart.
 
 ### The findings file
 

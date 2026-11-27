@@ -24,8 +24,11 @@ def make_result(
     reason: str | None = None,
     http_status: int | None = None,
     correlation_id: str | None = None,
+    receipt_token_carried: bool = True,
 ) -> CatsNetworkResult:
-    return CatsNetworkResult(response=response, reason=reason, http_status=http_status, correlation_id=correlation_id)
+    return CatsNetworkResult(
+        response=response, reason=reason, http_status=http_status, correlation_id=correlation_id, _receipt_token_carried=receipt_token_carried
+    )
 
 
 # =============================================================================
@@ -126,6 +129,25 @@ def test_correlation_id_is_excluded_from_equality() -> None:
     assert first == second
 
 
+def test_receipt_token_carried_is_excluded_from_equality() -> None:
+    """`sent == CatsNetworkResponse.SENT` must hold whether or not the datagram carried the token; receive_s3 is the gate."""
+    # arrange
+    untokened = make_result(CatsNetworkResponse.SENT, correlation_id="aaa", receipt_token_carried=False)
+    tokened = make_result(CatsNetworkResponse.SENT, correlation_id="aaa")
+
+    # act & assert
+    assert untokened == tokened
+
+
+def test_receipt_token_carried_defaults_to_true() -> None:
+    """A SENT result built by hand for an external sender (docs/concepts/network-testing.md) is taken to carry the token."""
+    # arrange
+    hand_built = CatsNetworkResult(response=CatsNetworkResponse.SENT, correlation_id="aaa")
+
+    # act & assert
+    assert hand_built._receipt_token_carried is True
+
+
 # =============================================================================
 # Hash agreement with the enum
 # =============================================================================
@@ -204,6 +226,11 @@ def test_value_delegates_to_response_value() -> None:
             make_result(CatsNetworkResponse.DNS_FAILURE, reason="[Errno -2] Name or service not known", correlation_id="3f2a"),
             "DNS_FAILURE('[Errno -2] Name or service not known', correlation_id='3f2a')",
             id="reason_and_correlation_id",
+        ),
+        pytest.param(
+            make_result(CatsNetworkResponse.SENT, correlation_id="3f2a", receipt_token_carried=False),
+            "SENT(correlation_id='3f2a')",
+            id="receipt_token_carried_is_not_printed",
         ),
         pytest.param(
             make_result(CatsNetworkResponse.SUCCESS, reason="r", http_status=200, correlation_id="c"),

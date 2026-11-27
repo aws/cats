@@ -50,14 +50,15 @@ def test_cross_account_parallel_role_assumed(deployed_cross_account_parallel_sta
 
 @skip_wrong_account
 @skip_no_cross_account
-def test_cross_account_parallel_multiple_accounts_work(deployed_cross_account_parallel_stacks: list[str]) -> None:
-    """Multiple cross-account parallel stacks have working sessions."""
+def test_cross_account_parallel_multiple_accounts_work(deployed_cross_account_parallel_stacks: list[str], subtests: pytest.Subtests) -> None:
+    """Multiple cross-account parallel stacks have working sessions; one block per sampled account."""
     # arrange - test a sample of accounts (first, middle, last)
     sample_indices = [0, NUM_PARALLEL_STACKS // 2, NUM_PARALLEL_STACKS - 1]
 
     # act / assert
     for i in sample_indices:
-        account = AccountUnderTest(f"parallel_{i}")
-        identity = account.session.client("sts").get_caller_identity()
-        assert identity["Account"] == CROSS_ACCOUNT_ID
-        assert f"parallel_{i}" in identity["Arn"]
+        with subtests.test(msg=f"parallel_{i}"):
+            account = AccountUnderTest(f"parallel_{i}")
+            identity = account.session.client("sts").get_caller_identity()
+            assert identity["Account"] == CROSS_ACCOUNT_ID
+            assert f"parallel_{i}" in identity["Arn"]

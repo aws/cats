@@ -56,6 +56,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
       a valid one would let any un-mocked boto3 path reach a real account.
     - Fake credentials + AWS_EC2_METADATA_DISABLED keep un-mocked paths off the network.
     - CATS_CONFIG from the shell leaks a real config into isolated tests.
+    - AWS_REGION is the config's Region fallback, so a shell that sets it fills aws_region
+      in the tests that assert it is unset.
     - COLUMNS changes Rich wrapping; consoles built at import time also captured it, so
       their width is forced instead, making exact-output assertions terminal-independent.
 
@@ -67,6 +69,7 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     import cats.cli.infra
 
     monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("CATS_CONFIG", raising=False)
     monkeypatch.delenv("COLUMNS", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
@@ -99,9 +102,9 @@ def _reset_cats_global_state() -> None:
     - `get_current_account_id` is a functools.cache: a test running under broad boto3
       mocking caches a MagicMock account id, which later tests then receive from the
       real call path.
-    - `entries` / `_entries_by_nodeid` on `cats.pytest_plugin` accumulate evidence
-      entries; a test driving the hooks in-process would otherwise leak entries into
-      later tests' reports.
+    - `entries` / `_entries_by_nodeid` / `_runs` / `_last_recorded` on `cats.pytest_plugin`
+      accumulate evidence entries and the hand-off between hooks; a test driving the hooks
+      in-process would otherwise leak entries into later tests' reports.
     - `_role_session_name` on `cats.resources.session_interact` is set by every
       `pytest_configure`. A test calling it with a `MagicMock` config stores the mock's
       `stash.get().role_session_name`, and every later AssumeRole fails parameter
@@ -119,5 +122,7 @@ def _reset_cats_global_state() -> None:
     get_current_account_id.cache_clear()
     cats.pytest_plugin.entries.clear()
     cats.pytest_plugin._entries_by_nodeid.clear()
+    cats.pytest_plugin._runs.clear()
+    cats.pytest_plugin._last_recorded = None
     cats.pytest_plugin._selection.clear()
     set_role_session_name(DEFAULT_ROLE_SESSION_NAME)

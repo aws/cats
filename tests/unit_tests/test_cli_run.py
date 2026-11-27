@@ -129,10 +129,26 @@ def test_tcp_call_emits_result_reason_and_null_http_status(mock_get_account: Mag
     assert json.loads(result.stdout) == expected
 
 
-def test_udp_call_emits_result_reason_and_correlation_id(mock_get_account: MagicMock, cli_runner: CliRunner) -> None:
+def test_udp_call_emits_result_reason_correlation_id_and_receipt_token_carried(mock_get_account: MagicMock, cli_runner: CliRunner) -> None:
     # arrange
     mock_get_account.return_value.priv.udp_call.return_value = CatsNetworkResult(response=CatsNetworkResponse.SENT, correlation_id="abc-123")
-    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123"}
+    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123", "receipt_token_carried": True}
+
+    # act
+    result = cli_runner.invoke(cats_cli, ["run", "udp-call", "--account", "accA", "--target", "priv", "--host", "10.0.1.5", "--port", "5000"])
+
+    # assert
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == expected
+
+
+def test_udp_call_emits_receipt_token_carried_false_when_the_datagram_carried_no_token(mock_get_account: MagicMock, cli_runner: CliRunner) -> None:
+    """A different process runs receive-s3 with only the ID, so the send must say the listener will drop this one."""
+    # arrange
+    mock_get_account.return_value.priv.udp_call.return_value = CatsNetworkResult(
+        response=CatsNetworkResponse.SENT, correlation_id="abc-123", _receipt_token_carried=False
+    )
+    expected = {"result": "SENT", "reason": None, "correlation_id": "abc-123", "receipt_token_carried": False}
 
     # act
     result = cli_runner.invoke(cats_cli, ["run", "udp-call", "--account", "accA", "--target", "priv", "--host", "10.0.1.5", "--port", "5000"])
@@ -247,7 +263,7 @@ def test_udp_call_dns_failure_emits_reason_with_correlation_id(mock_get_account:
     mock_get_account.return_value.priv.udp_call.return_value = CatsNetworkResult(
         response=CatsNetworkResponse.DNS_FAILURE, reason="[Errno -2] Name or service not known", correlation_id="abc-123"
     )
-    expected = {"result": "DNS_FAILURE", "reason": "[Errno -2] Name or service not known", "correlation_id": "abc-123"}
+    expected = {"result": "DNS_FAILURE", "reason": "[Errno -2] Name or service not known", "correlation_id": "abc-123", "receipt_token_carried": True}
 
     # act
     result = cli_runner.invoke(

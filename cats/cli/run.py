@@ -198,18 +198,29 @@ def udp_call(
     ] = None,
     config: ConfigRunOption = None,
 ) -> None:
-    """UDP send from ACCOUNT's TARGET to HOST:PORT. Emits {result, reason, correlation_id}.
+    """UDP send from ACCOUNT's TARGET to HOST:PORT. Emits {result, reason, correlation_id, receipt_token_carried}.
 
     result is SENT (datagram left the host; pass correlation_id to receive-s3 on the receiving
     account), DNS_FAILURE (name did not resolve), or FAILURE (unclassified; errno in reason).
-    REFUSED and TIMEOUT cannot occur for UDP.
+    REFUSED and TIMEOUT cannot occur for UDP. receipt_token_carried is true when the datagram
+    carried a receipt token; when false, no token was registered for HOST and a CATS listener
+    drops the datagram: receive-s3 would then report false for something CATS itself discarded,
+    so do not call it (the key matters on SENT; on DNS_FAILURE and FAILURE nothing was sent).
+    Pass --receiving-account to carry the token.
     """
     try:
         _validate_host_and_port(host, port)
         if receiving_account is not None:
             prepare_udp_receiver(config, receiving_account, host)
         result = _network_target(get_account(config, account), target).udp_call(host, port)
-        _emit({"result": result.value, "reason": result.reason, "correlation_id": result.correlation_id})
+        _emit(
+            {
+                "result": result.value,
+                "reason": result.reason,
+                "correlation_id": result.correlation_id,
+                "receipt_token_carried": result._receipt_token_carried,
+            }
+        )
     except _USAGE_ERRORS as e:
         _usage_exit(str(e))
     except _CONTRACT_ERRORS as e:

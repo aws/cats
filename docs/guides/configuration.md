@@ -35,7 +35,8 @@ accounts_under_test:
 `parent_account_id` is the account whose identities the test roles trust — the account
 running CATS. It has no default: `cats infra deploy` and `cats infra show-template`
 refuse with a clear error when it is not set, so a trust policy can never be rendered
-with an account nobody chose.
+with an account nobody chose. `cats infra deploy` also refuses, before creating any stack,
+when it is not the account of the credentials running the deploy.
 
 ## Multi-Account Configuration
 

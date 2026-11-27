@@ -40,7 +40,7 @@ from cats.cfn.deploy import (
 )
 from cats.cfn.render import estimate_template_size, reject_oversized_template, render_template, template_size
 from cats.cfn.resolve import resolve_account, resolve_account_settings
-from cats.cfn.session import get_deploy_session
+from cats.cfn.session import get_deploy_session, require_caller_is_parent_account
 from cats.cli.console import fail_marker, ok_marker, stderr_console
 from cats.cli.infra_ui.progress import MultiAccountProgress, SingleAccountProgress
 from cats.config import Settings
@@ -127,6 +127,7 @@ def _start_deploy_account(
     # Offline first: an oversized config is refused before the deploy role is assumed or anything
     # is resolved. The check on the real render below is the authoritative one.
     reject_oversized_template(account_name, estimate_template_size(Settings(), account_name))
+    require_caller_is_parent_account()
     session = get_deploy_session(account_name)
     resolved = resolve_account(
         account_name,

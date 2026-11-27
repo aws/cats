@@ -243,7 +243,8 @@ def make_config(
         allow_deploy_to_current_account: Set deployment setting
         cfn_stack_prefix: CloudFormation stack name prefix
         aws_region: AWS region for deployment
-        parent_account_id: Account ID running CATS (cats_deployment_settings.parent_account_id)
+        parent_account_id: Account ID running CATS (cats_deployment_settings.parent_account_id). A test that reaches
+            `cats infra deploy` must pass the mocked caller's account (test_infra.CALLER_ACCOUNT_ID): deploy refuses any other value
         account_network_settings: Per-account network settings override
         reporting: The ``reporting`` section, e.g. {"custom_markers": ["team"]}; omitted when None
         account_settings: Per-account account settings override

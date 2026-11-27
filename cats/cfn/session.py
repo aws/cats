@@ -18,7 +18,6 @@ import logging
 from functools import cache
 
 import boto3
-from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from cats.config import Settings
@@ -31,8 +30,6 @@ logger = logging.getLogger(__name__)
 # readiness gate probes (cats/cfn/readiness.py). Test runs use their own (cats/resources/session_interact.py),
 # so CloudTrail tells a deploy's calls from a test's.
 DEPLOY_ROLE_SESSION_NAME = "cats-infra"
-
-BOTO_RETRY_CONFIG = Config(retries={"max_attempts": 10, "mode": "adaptive"})
 
 
 @cache
@@ -54,6 +51,27 @@ def get_current_account_id() -> str:
             f"Cannot reach AWS to read the caller identity: {str(e).rstrip('.')}. "
             + "The environment CATS runs in needs a working AWS identity (a profile, SSO, or environment variables) and a Region."
         ) from e
+
+
+def require_caller_is_parent_account() -> None:
+    """Refuse a deploy whose test roles would trust an account other than the one running it.
+
+    The readiness gate assumes each test role from the caller's credentials, so a mismatch can
+    never pass the gate, and the roles it creates would trust the other account until destroyed.
+    An unset parent_account_id is left to render_template, which reports it on its own.
+    """
+    parent_account_id = Settings().cats_deployment_settings.parent_account_id
+    if parent_account_id is None:
+        return None
+    current_account_id = get_current_account_id()
+    if parent_account_id != current_account_id:
+        raise CatsConfigError(
+            f"cats_deployment_settings.parent_account_id is {parent_account_id}, "
+            + f"but 'cats infra deploy' is running as account {current_account_id} (the account 'aws sts get-caller-identity' reports). "
+            + "The test roles trust the parent account and the deploy assumes them from these credentials: "
+            + f"set parent_account_id to {current_account_id}, or deploy with credentials from account {parent_account_id}."
+        )
+    return None
 
 
 def get_deploy_session(account_name: str) -> boto3.Session:

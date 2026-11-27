@@ -146,6 +146,26 @@ jobs:
       - run: uv run --no-sync cats --help
       - run: uv run --no-sync python -c "import cats; import cats.pytest_plugin; import cats.cli.mcp"
 
+  pytest-ceiling:
+    name: Newest pytest the pin allows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      # The plugin reads private pytest names (_pytest.subtests, _pytest.junitxml) that a
+      # pytest point release within the pin can change; the lock only ever tests one release.
+      # A fresh `pip install aws-cats` resolves the newest pytest the pin allows, so that is
+      # what the unit suite runs against here. The lock is left as it is: this upgrades
+      # pytest alone, in this job's environment.
+      - run: uv sync --upgrade-package pytest
+      - run: uv run --no-sync python -c "import pytest; print(pytest.__version__)"
+      - run: uv run --no-sync pytest tests/unit_tests/ -n 4
+
   zizmor:
     name: Workflow security (zizmor)
     runs-on: ubuntu-latest

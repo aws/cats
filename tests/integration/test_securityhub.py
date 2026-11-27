@@ -17,9 +17,10 @@
 The unit tests prove the finding model and every failure path with moto and mocked clients.
 This module proves what they cannot: the grant lands on a real test role and is scoped to
 this account's own product; that role can import into the account's Security Hub; the
-finding is readable there with the fields CATS set; and a later run updates it in place
-rather than adding a second one. test_cross_account_securityhub.py covers the member account
-and delegated-administrator path.
+finding is readable there with the fields CATS set; a later run updates it in place
+rather than adding a second one; and a test with ``subtests.test()`` blocks lands one finding per
+block and one for the test, each block's naming its test. test_cross_account_securityhub.py covers
+the member account and delegated-administrator path.
 
 Security Hub is enabled in the account by the base stack (infra/integ-test-vpc.yaml) with no
 standards subscribed. Findings cannot be deleted through the API: the module archives the
@@ -37,6 +38,7 @@ import pytest
 from cats.report_run import ResultCounts
 from cats.report_writers.securityhub import SecurityHubWriter, finding_id
 from cats.reporting import ReportEntry
+from cats.user_agent import attributed_session
 from tests.integration.constants import ACCOUNT_ID, REGION, skip_wrong_account, stack_prefix
 from tests.integration.reporting_helpers import NESTED_TEST_FILE, junit_properties, run_nested_cats_session
 from tests.integration.securityhub_helpers import archive_synthetic_findings, manifest_finishing_now, synthetic_entry, wait_for_finding
@@ -53,11 +55,16 @@ NODEID_LANDS = "tests/integration/test_securityhub.py::synthetic_control_holds"
 NODEID_UPDATES = "tests/integration/test_securityhub.py::synthetic_control_fixed_later"
 # The one real test the nested reporting session runs; its nodeid is relative to that session's rootdir.
 NODEID_NESTED = f"{NESTED_TEST_FILE}::test_control_that_fails"
+# The nested test that uses subtests: its own nodeid, and its two blocks' (the test's nodeid plus pytest's description).
+NODEID_NESTED_SUBTESTS = f"{NESTED_TEST_FILE}::test_identity_claims"
+NODEID_NESTED_BLOCK_HOLDS = f"{NODEID_NESTED_SUBTESTS} [account]"
+NODEID_NESTED_BLOCK_FAILS = f"{NODEID_NESTED_SUBTESTS} [root-user]"
+NESTED_NODEIDS = (NODEID_NESTED, NODEID_NESTED_SUBTESTS, NODEID_NESTED_BLOCK_HOLDS, NODEID_NESTED_BLOCK_FAILS)
 
 
 def _securityhub() -> "SecurityHubClient":
-    """The deploy identity's client, used to read findings back and to archive them."""
-    client: SecurityHubClient = boto3.Session(region_name=REGION).client("securityhub")
+    """The deploy identity's client, used to read findings back and to archive them; attributed, so it retries like CATS's own."""
+    client: SecurityHubClient = attributed_session(region_name=REGION).client("securityhub")
     return client
 
 
@@ -72,7 +79,7 @@ def deployed_securityhub_stack(
             yield keyname
         finally:
             archive_synthetic_findings(
-                _securityhub(), REGION, STACK_PREFIX, ACCOUNT_KEYNAME, ACCOUNT_ID, (NODEID_LANDS, NODEID_UPDATES, NODEID_NESTED)
+                _securityhub(), REGION, STACK_PREFIX, ACCOUNT_KEYNAME, ACCOUNT_ID, (NODEID_LANDS, NODEID_UPDATES, *NESTED_NODEIDS)
             )
 
 
@@ -260,4 +267,110 @@ def test_control_that_fails(sechub_account: AccountUnderTest) -> None:
         },
         "oscal_findings": [(finding["target"]["target-id"], finding["target"]["status"]["state"]) for finding in ar_findings],
         "junit_run_id": junit_properties(run.junit_testsuite())["cats:run_id"],
+    }
+
+
+@skip_wrong_account
+def test_a_failed_subtest_block_is_a_finding_for_the_resource_and_one_for_its_test(
+    deployed_securityhub_stack: str, securityhub_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """A real test with two ``subtests.test()`` blocks, one failing: three entries, three findings, and each block's finding names its test.
+
+    The failed block and its test are two ACTIVE findings under two Ids; the passed block is a
+    third, ARCHIVED. ``cats/subtest_of`` is on the blocks' findings and absent from the test's,
+    so the two can be told apart in Security Hub, as ``subtest-of`` does in the OSCAL
+    observations.
+    """
+    # arrange
+    test_source = '''
+import pytest
+
+from cats import AccountUnderTest, cats
+
+
+@cats(standard_name="SOC2-CC6.6", control_ids=["CC6.6"])
+def test_identity_claims(sechub_account: AccountUnderTest, subtests: pytest.Subtests) -> None:
+    """Two claims about the test role's identity: the account holds, the root-user one does not."""
+    identity = sechub_account.session.client("sts").get_caller_identity()
+    with subtests.test(msg="account"):
+        assert identity["Account"] == sechub_account.account_id
+    with subtests.test(msg="root-user"):
+        assert identity["Arn"].endswith(":root"), f"the test role is not the root user: {identity['Arn']}"
+'''
+    test_finding = finding_id(STACK_PREFIX, ACCOUNT_KEYNAME, REGION, NODEID_NESTED_SUBTESTS)
+    holds_finding = finding_id(STACK_PREFIX, ACCOUNT_KEYNAME, REGION, NODEID_NESTED_BLOCK_HOLDS)
+    fails_finding = finding_id(STACK_PREFIX, ACCOUNT_KEYNAME, REGION, NODEID_NESTED_BLOCK_FAILS)
+
+    # act
+    run = run_nested_cats_session(securityhub_config, ["cats_json", "oscal_ar", "securityhub"], test_source, tmp_path, securityhub_region=REGION)
+    assert run.returncode == 1, run.summary()  # a block failed, so the test failed; every writer still ran
+    report = run.report()
+    run_id = report["run"]["run_id"]
+    account = run.securityhub_document()["accounts"][0]
+    landed = {
+        nodeid: wait_for_finding(_securityhub(), wanted, run_id)
+        for nodeid, wanted in (
+            (NODEID_NESTED_SUBTESTS, test_finding),
+            (NODEID_NESTED_BLOCK_HOLDS, holds_finding),
+            (NODEID_NESTED_BLOCK_FAILS, fails_finding),
+        )
+    }
+    observations = run.assessment_results()["assessment-results"]["results"][0]["observations"]
+
+    # assert
+    # The run assumed the test role as ``cats-<run id>``, so the ARN in the assertion message is known.
+    session_arn = f"arn:aws:sts::{ACCOUNT_ID}:assumed-role/{TEST_ROLE_NAME}/cats-{run_id}"
+    expected_counts: ResultCounts = {"total": 3, "passed": 1, "failed": 2, "error": 0, "skipped": 0, "xfailed": 0, "xpassed": 0, "not_run": 0}
+    expected = {
+        "counts": expected_counts,
+        "entries": [
+            (NODEID_NESTED_SUBTESTS, "failed", "contains 1 failed subtest", None),
+            (NODEID_NESTED_BLOCK_HOLDS, "passed", None, {"of": NODEID_NESTED_SUBTESTS, "msg": "account", "context": {}}),
+            (
+                NODEID_NESTED_BLOCK_FAILS,
+                "failed",
+                f"AssertionError: the test role is not the root user: {session_arn}",
+                {"of": NODEID_NESTED_SUBTESTS, "msg": "root-user", "context": {}},
+            ),
+        ],
+        "securityhub_detail": f"Security Hub ({REGION}): {ACCOUNT_KEYNAME} 3 findings imported",
+        "finding_ids": sorted([test_finding, holds_finding, fails_finding]),
+        "landed": {
+            NODEID_NESTED_SUBTESTS: ("FAILED", "ACTIVE", "failed", None),
+            NODEID_NESTED_BLOCK_HOLDS: ("PASSED", "ARCHIVED", "passed", NODEID_NESTED_SUBTESTS),
+            NODEID_NESTED_BLOCK_FAILS: ("FAILED", "ACTIVE", "failed", NODEID_NESTED_SUBTESTS),
+        },
+        "oscal_subtest_of": {
+            "test_identity_claims": None,
+            "test_identity_claims [account]": NODEID_NESTED_SUBTESTS,
+            "test_identity_claims [root-user]": NODEID_NESTED_SUBTESTS,
+        },
+    }
+    assert expected == {
+        "counts": report["run"]["counts"],
+        "entries": [
+            # The message's first line; the assertion introspection below it holds an object address.
+            (
+                entry["nodeid"],
+                entry["result"],
+                entry["error_message"].splitlines()[0] if entry["error_message"] is not None else None,
+                entry["subtest"],
+            )
+            for entry in report["tests"]
+        ],
+        "securityhub_detail": next(writer["detail"] for writer in report["run"]["writers"] if writer["format"] == "securityhub"),
+        "finding_ids": sorted(finding["Id"] for finding in account["findings"]),
+        "landed": {
+            nodeid: (
+                finding["Compliance"]["Status"],
+                finding["RecordState"],
+                finding["ProductFields"]["cats/result"],
+                finding["ProductFields"].get("cats/subtest_of"),
+            )
+            for nodeid, finding in landed.items()
+        },
+        "oscal_subtest_of": {
+            observation["title"]: next((prop["value"] for prop in observation["props"] if prop["name"] == "subtest-of"), None)
+            for observation in observations
+        },
     }

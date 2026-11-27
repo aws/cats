@@ -956,7 +956,19 @@ def test_ec2_udp_call_registry_hit_prepends_token(handler: NetworkHandler, mock_
     assert (_ssm_params(mock_ssm)["TargetMessage"], result.correlation_id) == ([f"{RECEIPT_TOKEN}:{fixed_uuid}"], str(fixed_uuid))
 
 
-def test_ec2_udp_call_registry_miss_sends_bare_payload(handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID) -> None:
+def test_ec2_udp_call_registry_hit_result_carried_the_token(handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID) -> None:
+    # arrange
+    register_udp_receipt_token("target.internal", RECEIPT_TOKEN)
+    mock_ssm.get_command_invocation.return_value = make_ssm_response("Success", "SENT")
+
+    # act
+    result = handler.ec2_udp_call("target.internal", 5000)
+
+    # assert
+    assert result._receipt_token_carried is True
+
+
+def test_ec2_udp_call_registry_miss_sends_untokened_payload(handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID) -> None:
     # arrange
     mock_ssm.get_command_invocation.return_value = make_ssm_response("Success", "SENT")
 
@@ -967,14 +979,40 @@ def test_ec2_udp_call_registry_miss_sends_bare_payload(handler: NetworkHandler, 
     assert _ssm_params(mock_ssm)["TargetMessage"] == [str(fixed_uuid)]
 
 
+def test_ec2_udp_call_registry_miss_result_records_no_token_carried(handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID) -> None:
+    """The result records that the datagram carried no token, so receive_s3 can refuse it; the repr is unchanged."""
+    # arrange
+    mock_ssm.get_command_invocation.return_value = make_ssm_response("Success", "SENT")
+
+    # act
+    result = handler.ec2_udp_call("10.0.1.5", 5000)
+
+    # assert
+    assert (result._receipt_token_carried, repr(result)) == (False, f"SENT(correlation_id='{fixed_uuid}')")
+
+
+def test_ec2_udp_call_registry_miss_dns_failure_also_records_no_token_carried(
+    handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID
+) -> None:
+    """The flag describes the datagram that was built, whatever became of it."""
+    # arrange
+    mock_ssm.get_command_invocation.return_value = make_ssm_response("Success", "DNS_FAILURE", reason="[Errno -2] Name or service not known")
+
+    # act
+    result = handler.ec2_udp_call("cats-nonexistent.invalid", 5000)
+
+    # assert
+    assert (result.response, result._receipt_token_carried) == (CatsNetworkResponse.DNS_FAILURE, False)
+
+
 def test_udp_call_registry_miss_warns_that_a_cats_listener_would_drop_it(
     handler: NetworkHandler, mock_ssm: MagicMock, fixed_uuid: uuid.UUID, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A bare datagram to a CATS listener is dropped and receive_s3 reads False; the miss must be visible, not DEBUG."""
+    """An untokened datagram to a CATS listener is dropped and receive_s3 reads False; the miss must be visible, not DEBUG."""
     # arrange
     mock_ssm.get_command_invocation.return_value = make_ssm_response("Success", "SENT")
     expected_message = (
-        "No receipt token is known for target.internal, so the datagram is sent bare. If this is a CATS listener, name its account "
+        "No receipt token is known for target.internal, so the datagram is sent without one. If this is a CATS listener, name its account "
         + "first (in pytest, request that account's fixture; in cats run or MCP, pass the receiving account); otherwise ignore this."
     )
 
@@ -1013,7 +1051,7 @@ def test_lambda_udp_call_registry_hit_prepends_token(handler_lambda_first: Netwo
     assert (_lambda_event(mock_lambda)["TARGET_MESSAGE"], result.correlation_id) == (f"{RECEIPT_TOKEN}:{fixed_uuid}", str(fixed_uuid))
 
 
-def test_lambda_udp_call_registry_miss_sends_bare_payload(
+def test_lambda_udp_call_registry_miss_sends_untokened_payload(
     handler_lambda_first: NetworkHandler, mock_lambda: MagicMock, fixed_uuid: uuid.UUID
 ) -> None:
     # arrange
@@ -1024,6 +1062,34 @@ def test_lambda_udp_call_registry_miss_sends_bare_payload(
 
     # assert
     assert _lambda_event(mock_lambda)["TARGET_MESSAGE"] == str(fixed_uuid)
+
+
+def test_lambda_udp_call_registry_hit_result_carried_the_token(
+    handler_lambda_first: NetworkHandler, mock_lambda: MagicMock, fixed_uuid: uuid.UUID
+) -> None:
+    # arrange
+    register_udp_receipt_token("target.internal", RECEIPT_TOKEN)
+    mock_lambda.invoke.return_value = make_lambda_response("SENT")
+
+    # act
+    result = handler_lambda_first.lambda_udp_call("target.internal", 5000)
+
+    # assert
+    assert result._receipt_token_carried is True
+
+
+def test_lambda_udp_call_registry_miss_result_records_no_token_carried(
+    handler_lambda_first: NetworkHandler, mock_lambda: MagicMock, fixed_uuid: uuid.UUID
+) -> None:
+    """Transport parity: the Lambda path records the miss exactly as the EC2 path does."""
+    # arrange
+    mock_lambda.invoke.return_value = make_lambda_response("SENT")
+
+    # act
+    result = handler_lambda_first.lambda_udp_call("10.0.1.5", 5000)
+
+    # assert
+    assert (result._receipt_token_carried, repr(result)) == (False, f"SENT(correlation_id='{fixed_uuid}')")
 
 
 # =============================================================================

@@ -118,6 +118,27 @@ def test_can_list_buckets(prod_account: AccountUnderTest) -> None:
 
 ### Prove an API Call is Denied
 
+A denial test proves an SCP only when the role's own policy allows the action. Through
+`readonly`, the role's own policy does not allow the action, so the call is denied with or without
+an SCP, and the test passes either way. Give the test a role that allows the action:
+
+```yaml
+global_account_settings:
+  additional_roles:
+    scp_probe:
+      inline_policies:
+        allow-delete-bucket:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: s3:DeleteBucket
+              Resource: arn:aws:s3:::no-such-bucket-scp-probe
+```
+
+The role is deployed to every account under test, so its policy allows the action on the one
+resource the test names and nothing else; the SCP under test must cover that same ARN. Even
+without the SCP, the role can do nothing.
+
 ```python
 import pytest
 from botocore.exceptions import ClientError
@@ -125,11 +146,17 @@ from botocore.exceptions import ClientError
 
 def test_cannot_delete_bucket(prod_account: AccountUnderTest) -> None:
     """Verify SCP blocks bucket deletion."""
-    s3 = prod_account.role.readonly.client("s3")
+    s3 = prod_account.role.scp_probe.client("s3")
 
-    with pytest.raises(ClientError, match="AccessDenied"):
-        s3.delete_bucket(Bucket="critical-bucket")
+    with pytest.raises(ClientError, match="explicit deny in a service control policy"):
+        s3.delete_bucket(Bucket="no-such-bucket-scp-probe")
 ```
+
+Match the SCP's explicit deny, not the bare `AccessDenied` code, which an implicit deny also
+returns. Point the call at a name the SCP covers that does not exist, so a missing SCP fails the
+test instead of deleting something. Run it once against the real SCP to confirm the service returns
+the SCP message for a missing resource: S3 may answer `NoSuchBucket` instead, and bucket names are
+global, so the name can belong to another account.
 
 ### Prove a Resource Exists
 
@@ -196,7 +223,7 @@ along as diagnostics that print on failure but never take part in equality.
 | `DNS_FAILURE` | Name did not resolve; no packet was sent | The *resolver* acted (DNS Firewall): assert it as such, not as `TIMEOUT` |
 | `TLS_FAILURE` | TCP connected, TLS handshake failed (`https_call` only) | TLS inspection with an untrusted CA, or the wrong kind of listener |
 | `FAILURE` | The path could not be proven open or blocked: a connect that got no HTTP reply (hung backend), or an unclassified errno in `result.reason` | Never expected: investigate |
-| `SENT` | UDP datagram left the host | Prove arrival with `receive_s3` |
+| `SENT` | UDP datagram left the host | Prove arrival with `receive_s3`; address the listener by `ec2_dns_name`, or the datagram carries no receipt token and `receive_s3` refuses it |
 
 A negative (isolation) test needs a listener known to be ready at the target and
 an allowed-path positive control in the same run; otherwise a broken listener
@@ -452,6 +479,64 @@ def test_traffic_matrix(
     
     assert result == expected
 ```
+
+## Subtests: one check per discovered resource
+
+Use pytest's `subtests` fixture when you only find out what to check while the test runs, such
+as every log group in an account. Each check gets its own pass or fail, and a failure doesn't
+stop the loop:
+
+```python
+import pytest
+from cats import AccountUnderTest, cats
+
+
+@cats(standard_name="SOC2-CC7.2")
+def test_log_group_retention(prod_account: AccountUnderTest, subtests: pytest.Subtests) -> None:
+    """Every log group retains logs for 365 days."""
+    logs = prod_account.role.readonly.client("logs")
+    groups = [group for page in logs.get_paginator("describe_log_groups").paginate() for group in page["logGroups"]]
+    assert groups, "no log groups discovered"
+
+    for group in groups:
+        with subtests.test(msg=group["logGroupName"], region="us-east-1"):
+            assert group.get("retentionInDays") == 365
+```
+
+Each block becomes its own report entry, named after the test and the block
+(`test_log_group_retention [/aws/lambda/orders] (region='us-east-1')`), so a failure names the
+log group. See [Subtests in `report.json`](../api-reference/Reports.md#subtests).
+
+Tips:
+
+- **Check that you found something.** If the list is empty, no blocks run and the test passes.
+  The `assert groups, ...` line turns an empty list into a failure.
+- **Put the resource name in `msg`, as a string.** It is shown exactly. A `msg` that is not a
+  string (a `Path`, an int) fails the block. Keep it to one line: it becomes part of the block's
+  `nodeid`, which is printed in summaries and copied into finding titles. Other keyword arguments
+  are shown as pytest prints them and cut at 240 characters, so keep them short.
+- **Give every block a different `msg`, and keep it the same from run to run.** `msg` and the
+  keyword arguments become the block's `nodeid`, and the Security Hub finding `Id` and OSCAL
+  uuids derive from it. Two blocks with the same description in one test fail the second one,
+  because two findings would share an identity. A value that changes every run (a timestamp, a
+  request id, an object's default `repr`) makes a new finding every run and never updates or
+  retires the old one. Use the resource's own name or ARN; for data with no natural name,
+  `enumerate` works if the source order is stable:
+
+  ```python
+  for index, statement in enumerate(policy["Statement"]):
+      with subtests.test(msg=f"statement-{index}", sid=statement.get("Sid")):
+          assert statement["Effect"] == "Deny"
+  ```
+
+- **Accounts registered during the loop land on later blocks.** A block's entry carries the
+  accounts and `add_report_metadata` values the test had registered when the block ended, so
+  `get_account_fixture(name)` inside the loop puts account N on blocks N onward. For one account
+  per block, take the accounts as fixture parameters instead; they are on every entry.
+- **Choose what a block covers.** One block per resource is common; one per region or per
+  resource type works too. Each block is a separate report entry and Security Hub finding.
+- **Markers cover the whole test.** Every block gets the test's `@cats(...)` standard and
+  markers. A read-only check and a check that changes something belong in separate tests.
 
 ## Multi-Region Testing
 

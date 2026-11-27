@@ -331,6 +331,7 @@ def test_every_entry_has_every_key(pytester: pytest.Pytester) -> None:
         "xfail": False,
         "error_message": None,
         "reason": None,
+        "subtest": None,
     }
     assert expected == entry
 
@@ -518,9 +519,9 @@ def test_run_records_each_writers_outcome_after_they_ran(pytester: pytest.Pytest
 
 
 def test_run_records_a_failed_writer_with_its_error(pytester: pytest.Pytester) -> None:
-    """The failed sibling is named in report.json, not only in the terminal."""
+    """The failed sibling is named in report.json, not only in the terminal; exit_status predates it and stays 0."""
     # arrange
-    write_project(pytester, reporting={"report_formats": ["cats_json", "oscal_ar"]})
+    write_project(pytester, reporting={"report_formats": ["cats_json", "oscal_ar"]}, test_source="def test_ok():\n    assert True\n")
     pytester.makeconftest(f'''
 import os
 os.environ["CATS_CONFIG"] = "{pytester.path / "cats.yaml"}"
@@ -542,12 +543,63 @@ cats.report_writers.oscal_ar.OscalArWriter.write = _boom
     # assert
     expected = (
         1,
+        0,
         [
             {"format": "cats_json", "file": "report.json", "status": "ok", "detail": ""},
             {"format": "oscal_ar", "file": None, "status": "failed", "detail": "RuntimeError('no disk')"},
         ],
     )
-    assert expected == (result.ret, report["run"]["writers"])
+    assert expected == (result.ret, report["run"]["exit_status"], report["run"]["writers"])
+
+
+def test_setup_error_exits_nonzero_with_failed_at_zero(pytester: pytest.Pytester) -> None:
+    """A fixture that raises is an error, not a failure: counts.failed stays 0 and the run still exits 1."""
+    # arrange
+    write_project(
+        pytester,
+        reporting={},
+        test_source="""
+import pytest
+
+@pytest.fixture
+def account():
+    raise RuntimeError("AccessDenied: sts:AssumeRole")
+
+def test_needs_account(account):
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+    run = json.loads((pytester.path / "report.json").read_text())["run"]
+
+    # assert
+    expected_counts: ResultCounts = {"total": 1, "passed": 0, "failed": 0, "error": 1, "skipped": 0, "xfailed": 0, "xpassed": 0, "not_run": 0}
+    assert (1, 1, expected_counts) == (result.ret, run["exit_status"], run["counts"])
+
+
+def test_collection_error_exits_nonzero_with_no_entries(pytester: pytest.Pytester) -> None:
+    """A test module that cannot be imported adds no entry: every count is 0 and the run still exits 2."""
+    # arrange
+    write_project(
+        pytester,
+        reporting={},
+        test_source="""
+import pack_dependency_that_is_not_installed
+
+def test_never_collected():
+    assert True
+""",
+    )
+
+    # act
+    result = pytester.runpytest_subprocess("-p", "no:randomly")
+    run = json.loads((pytester.path / "report.json").read_text())["run"]
+
+    # assert
+    expected_counts: ResultCounts = {"total": 0, "passed": 0, "failed": 0, "error": 0, "skipped": 0, "xfailed": 0, "xpassed": 0, "not_run": 0}
+    assert (2, 2, expected_counts) == (result.ret, run["exit_status"], run["counts"])
 
 
 def test_files_off_records_the_file_only_writers_as_skipped(pytester: pytest.Pytester) -> None:

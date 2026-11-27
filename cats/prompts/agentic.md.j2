@@ -67,7 +67,7 @@ return JSON objects. Errors surface as MCP tool errors with remediation text.
 | `cats_account_info(account)` | Runtime metadata from CloudFormation outputs: deployed network handlers, EC2 DNS names, resolved VPC/subnet IDs. Triggers assume-role on first call per account. |
 | `cats_http_call(account, target, host, port)` | HTTP from `account`'s `target` network segment to `host:port`. Returns `{"result", "reason", "http_status"}`; every key is always present (`null` when absent). See the result taxonomy below. |
 | `cats_tcp_call(account, target, host, port)` | TCP connection attempt. Same return shape; `http_status` is always `null`. |
-| `cats_udp_call(account, target, host, port, receiving_account=None)` | UDP send. Returns `{"result", "reason", "correlation_id"}`. `result` is `SENT`, `DNS_FAILURE`, or `FAILURE` (never `REFUSED`/`TIMEOUT`: the sender learns nothing after the datagram leaves). When `host` is a CATS listener, pass `receiving_account` (the account it belongs to) so the datagram carries that account's receipt token; then pair `correlation_id` with `cats_receive_s3` on that account when `result` is `SENT`. |
+| `cats_udp_call(account, target, host, port, receiving_account=None)` | UDP send. Returns `{"result", "reason", "correlation_id", "receipt_token_carried"}`. `result` is `SENT`, `DNS_FAILURE`, or `FAILURE` (never `REFUSED`/`TIMEOUT`: the sender learns nothing after the datagram leaves). When `host` is a CATS listener, pass `receiving_account` (the account it belongs to) so the datagram carries that account's receipt token; then pair `correlation_id` with `cats_receive_s3` on that account when `result` is `SENT`. `receipt_token_carried` is `false` when no token was registered for `host`: the datagram was sent without one and a CATS listener drops it. |
 | `cats_receive_s3(account, target, correlation_id)` | Poll the receiving account's response bucket for a UDP receipt. Returns `{"received": true \| false}`. |
 | `cats_shell(account, target, command)` | Run shell command(s) on ACCOUNT's TARGET EC2 instance through SSM run-command. `command` is a `list[str]` — one element for single commands, multiple for multi-line scripts. Returns `ShellResult` fields (`stdout`, `stderr`, `exit_code`, `duration_ms`, `stdout_truncated`, `stderr_truncated`). Requires `allow_shell: true` on the account's `account_settings` at deploy time; runs as root with the EC2 instance's IAM role, not the CATS test role. |
 | `cats_write_profile(account, role, profile_name)` | Write an AWS profile that assumes the test role from your current identity — `role_arn` plus the parent identity, never a credential. Always writes the user's `~/.aws/config` (there is no file argument; another location is `cats run write-profile --profile-file <path>`, run by the user). Returns `{"profile_name", "profile_file", "role_arn", "parent"}`, `profile_file` the real path written (`~` expanded, symlinks followed). Your own AWS tool (the `aws` CLI, an SDK, a host-provided AWS tool) uses `profile_name`; it assumes and refreshes the role itself, so the profile does not expire. |
@@ -125,19 +125,21 @@ CATS-to-arbitrary endpoints (public URLs, your own hosts, anything reachable).
 
 ```
 udp  = cats_udp_call(account="sender", target="pub", host=dns, port=5000, receiving_account="receiver")
-# udp == {"result": "SENT", "reason": null, "correlation_id": "..."}
+# udp == {"result": "SENT", "reason": null, "correlation_id": "...", "receipt_token_carried": true}
 recv = cats_receive_s3(account="receiver", target="priv", correlation_id=udp["correlation_id"])
 ```
 
-Only poll when `udp["result"]` is `SENT`. A `DNS_FAILURE` means nothing was sent,
-so `received: false` would say "dropped in flight" about a datagram that never
-existed. Retry `cats_receive_s3` a few times if `received` is false — UDP delivery
-is best-effort and S3 PUT visibility is not instant. UDP ingestion is
-authenticated: CATS listeners drop raw untokened datagrams, and `cats_udp_call`
-prepends the receiving account's receipt token when you name that account with
-`receiving_account`. Without it the datagram goes out bare and the listener drops
-it, so `received: false` would be CATS discarding its own datagram, not a control
-blocking it. Omit `receiving_account` only for a target that is not a CATS listener.
+Only poll when `udp["result"]` is `SENT` and `udp["receipt_token_carried"]` is `true`. A
+`DNS_FAILURE` means nothing was sent, so `received: false` would say "dropped in
+flight" about a datagram that never existed. Retry `cats_receive_s3` a few times if
+`received` is false — UDP delivery is best-effort and S3 PUT visibility is not
+instant. UDP ingestion is authenticated: CATS listeners drop raw untokened datagrams,
+and `cats_udp_call` prepends the receiving account's receipt token when you name
+that account with `receiving_account`. Without it the datagram is sent without a token,
+`receipt_token_carried` is `false`, and the listener drops it, so `received: false` would
+be CATS discarding its own datagram, not a control blocking it. Omit
+`receiving_account` only for a target that is not a CATS listener, and never call
+`cats_receive_s3` for a send whose `receipt_token_carried` is `false`.
 
 ### Switching between CATS projects
 
@@ -198,8 +200,9 @@ for the pytest side.
 
 `report.json` is written by `cats test`. It is an object: `run` is the provenance of the
 evidence (run id, timestamps, `pytest_args`, `selection`, `counts`, `outputs`) and `tests` is
-one entry per test. At scale `tests` can hold tens of thousands of entries — never read the
-full file into context. The field tables in the Reports reference (the `run` block
+one entry per test, plus one per `subtests.test()` block (its `subtest` key names the test; it
+is `null` on a test's own entry). At scale `tests` can hold tens of thousands of entries — never
+read the full file into context. The field tables in the Reports reference (the `run` block
 and the entry shape) are the contract for both; they are the reference to read when a field is
 in doubt.
 

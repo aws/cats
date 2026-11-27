@@ -64,6 +64,7 @@ def _entry(
     error_message: str | None = None,
     reason: str | None = None,
     xfail: bool = False,
+    subtest: dict[str, Any] | None = None,
 ) -> ReportEntry:
     entry: ReportEntry = {
         "result": result,  # type: ignore[typeddict-item]
@@ -80,6 +81,7 @@ def _entry(
         "reason": reason,
         "duration_s": 0.5,
         "recorded_at": "2026-09-24T10:53:17+00:00",
+        "subtest": subtest,  # type: ignore[typeddict-item]
     }
     return entry
 
@@ -185,3 +187,47 @@ def test_observation_uuids_are_stable_across_runs(tmp_path: Path) -> None:
     doc_uuid_a = doc_a["assessment-results"]["uuid"]
     doc_uuid_b = doc_b["assessment-results"]["uuid"]
     assert (obs_a == obs_b, doc_uuid_a == doc_uuid_b) == (True, False)
+
+
+def test_subtest_entries_are_observations_and_findings_of_their_own(tmp_path: Path, oscal_schema: dict[str, Any]) -> None:
+    """A test with two subtests is three entries, so three observations and three findings on the control, each with its own uuid."""
+    # arrange
+    parent = "test_buckets"
+    entries = [
+        _entry(result="failed", test_name=parent, standards=["SOC2-CC6.6"], error_message="contains 1 failed subtest"),
+        _entry(
+            result="failed",
+            test_name=f"{parent} [bucket-a] (region='us-east-1')",
+            standards=["SOC2-CC6.6"],
+            error_message="AssertionError: bucket-a public",
+            subtest={"of": f"tests/test_module.py::{parent}", "msg": "bucket-a", "context": {"region": "us-east-1"}},
+        ),
+        _entry(
+            result="passed",
+            test_name=f"{parent} [bucket-b]",
+            standards=["SOC2-CC6.6"],
+            subtest={"of": f"tests/test_module.py::{parent}", "msg": "bucket-b", "context": {}},
+        ),
+    ]
+
+    # act
+    document = _write_and_load(tmp_path, entries)
+
+    # assert
+    jsonschema.validate(document, oscal_schema)
+    result = document["assessment-results"]["results"][0]
+    expected = {
+        "observations": 3,
+        "distinct_observation_uuids": 3,
+        "findings": [("SOC2-CC6.6", "not-satisfied"), ("SOC2-CC6.6", "not-satisfied"), ("SOC2-CC6.6", "satisfied")],
+        "distinct_finding_uuids": 3,
+        "subtest_of": [None, f"tests/test_module.py::{parent}", f"tests/test_module.py::{parent}"],
+    }
+    actual = {
+        "observations": len(result["observations"]),
+        "distinct_observation_uuids": len({obs["uuid"] for obs in result["observations"]}),
+        "findings": [(finding["target"]["target-id"], finding["target"]["status"]["state"]) for finding in result["findings"]],
+        "distinct_finding_uuids": len({finding["uuid"] for finding in result["findings"]}),
+        "subtest_of": [next((prop["value"] for prop in obs["props"] if prop["name"] == "subtest-of"), None) for obs in result["observations"]],
+    }
+    assert expected == actual

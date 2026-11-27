@@ -29,6 +29,8 @@ from pytest_mock import MockerFixture
 
 from cats.cfn.deploy import (
     CATS_ACCOUNT_KEYNAME_TAG_KEY,
+    CATS_MANAGED_TAG_KEY,
+    CATS_MANAGED_TAG_VALUE,
     CATS_VERSION_TAG_KEY,
     UDP_RECEIPT_TOKEN_PARAMETER_KEY,
     DeployResult,
@@ -1106,7 +1108,7 @@ def test_start_destroy_existing_stack_returns_pending(aws_session: boto3.Session
     stack_name = "test-start-destroy-existing"
     account_name = "test-account"
     cfn = aws_session.client("cloudformation", region_name=REGION)
-    cfn.create_stack(StackName=stack_name, TemplateBody=SIMPLE_TEMPLATE)
+    cfn.create_stack(StackName=stack_name, TemplateBody=SIMPLE_TEMPLATE, Tags=[{"Key": CATS_MANAGED_TAG_KEY, "Value": CATS_MANAGED_TAG_VALUE}])
 
     # act
     result = start_destroy(aws_session, stack_name, REGION, account_name)
@@ -1119,7 +1121,7 @@ def test_start_destroy_existing_stack_returns_pending(aws_session: boto3.Session
 def test_start_destroy_never_reads_stack_outputs(mock_session: MagicMock, mock_cfn: MagicMock, mocker: MockerFixture) -> None:
     """A 1.0 client must destroy a stack deployed by an older CATS.
 
-    Destroy identifies the stack by describe_stacks (StackId only), finds the bucket via
+    Destroy identifies the stack by describe_stacks (StackId and Tags only), finds the bucket via
     list_stack_resources, and calls delete_stack. It never parses Outputs, whose keys are
     the part of the stack shape that changes between releases (e.g. ProbeLambdaName).
     """
@@ -1128,6 +1130,7 @@ def test_start_destroy_never_reads_stack_outputs(mock_session: MagicMock, mock_c
         "Stacks": [
             {
                 "StackId": "arn:aws:cloudformation:us-east-1:111111111111:stack/CATS-old/abc",
+                "Tags": [{"Key": CATS_MANAGED_TAG_KEY, "Value": CATS_MANAGED_TAG_VALUE}],
                 "Outputs": [{"OutputKey": "HttpLambdaNameprivate", "OutputValue": "CATS-old-http-private"}],
             }
         ]
@@ -1851,6 +1854,65 @@ def test_start_destroy_pending_stack_records_a_delete(aws_session: boto3.Session
     # assert
     assert isinstance(result, PendingStack)
     assert result.operation == "delete"
+
+
+def test_start_destroy_stack_another_keyname_deployed_is_refused(mock_session: MagicMock, mock_cfn: MagicMock) -> None:
+    """Destroy for 'CATS-a' + 'prod' must not delete the stack 'CATS-' + 'aprod' deployed under the same name."""
+    # arrange
+    mock_cfn.describe_stacks.return_value = existing_stack("CREATE_COMPLETE", account_keyname="aprod")
+    expected = DeployResult(
+        account_name="prod",
+        success=False,
+        error=(
+            "Stack test-stack was deployed for account keyname 'aprod', not 'prod': "
+            + "the two names concatenate with cfn_stack_prefix to the same stack name. "
+            + "Destroy it from the config that deployed it."
+        ),
+    )
+
+    # act
+    result = start_destroy(mock_session, "test-stack", REGION, "prod")
+
+    # assert
+    assert (result, call_names(mock_cfn)) == (expected, ["describe_stacks"])
+
+
+def test_start_destroy_stack_not_cats_managed_is_refused(mock_session: MagicMock, mock_cfn: MagicMock) -> None:
+    """A cfn_stack_prefix that lands on someone else's stack must not empty its bucket or delete it."""
+    # arrange
+    mock_cfn.describe_stacks.return_value = existing_stack("CREATE_COMPLETE", cats_managed=False, version=None)
+    expected = DeployResult(
+        account_name="prod",
+        success=False,
+        error=(
+            "Stack test-stack is not tagged cats:managed=true so CATS will not delete it: 'cats infra deploy' did not create it. "
+            + "Delete it yourself, or destroy with the cfn_stack_prefix that deployed the CATS stack."
+        ),
+    )
+
+    # act
+    result = start_destroy(mock_session, "test-stack", REGION, "prod")
+
+    # assert
+    assert (result, call_names(mock_cfn)) == (expected, ["describe_stacks"])
+
+
+def test_start_destroy_deletes_a_stack_the_same_keyname_deployed(mock_session: MagicMock, mock_cfn: MagicMock, mocker: MockerFixture) -> None:
+    """The guards refuse another keyname's stack and a foreign one; the stack this config deployed still goes."""
+    # arrange
+    response = existing_stack("CREATE_COMPLETE", account_keyname="prod")
+    response["Stacks"][0]["StackId"] = "arn:aws:cloudformation:us-east-1:111111111111:stack/test-stack/abc"
+    mock_cfn.describe_stacks.return_value = response
+    mock_cfn.list_stack_resources.return_value = {"StackResourceSummaries": []}
+    mocker.patch("cats.cfn.deploy.StackPoller.seeded")
+    expected_calls = ["describe_stacks", "list_stack_resources", "delete_stack"]
+
+    # act
+    result = start_destroy(mock_session, "test-stack", REGION, "prod")
+
+    # assert
+    assert isinstance(result, PendingStack)
+    assert (result.operation, [name for name in call_names(mock_cfn) if not name.startswith("describe_stacks().")]) == ("delete", expected_calls)
 
 
 def test_start_deploy_refuses_a_stack_another_keyname_deployed(mock_session: MagicMock, mock_cfn: MagicMock) -> None:

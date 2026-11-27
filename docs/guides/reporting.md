@@ -81,7 +81,7 @@ and, in yellow, any `excluded` entry that matched no test.
 ## CATS JSON (`cats_json`)
 
 The native CATS report, `report.json`: a `run` block with the provenance of the evidence and one entry
-per test. Gate a pipeline with `jq -e '.run.counts.failed == 0' report.json`; the field tables are in the
+per test. Gate a pipeline on the exit status of `cats test`; the field tables are in the
 [Reports reference](../api-reference/Reports.md#reportjson).
 
 ## OSCAL Assessment Results (`oscal_ar`)

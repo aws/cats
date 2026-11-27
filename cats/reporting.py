@@ -211,8 +211,31 @@ def get_custom_markers(item: pytest.Function) -> dict[str, Any]:
     return custom_marker_output
 
 
+class SubtestDetail(TypedDict):
+    """What a subtest's entry knows about itself; ``subtest`` on a ReportEntry.
+
+    - ``of``: the nodeid of the test whose ``subtests.test()`` block this entry records.
+    - ``msg``: the block's ``msg`` argument, verbatim; ``None`` when the test gave none.
+    - ``context``: the block's keyword arguments as pytest renders them (``repr``, cut past
+      240 characters), the text its status line shows.
+    """
+
+    of: str
+    msg: str | None
+    context: dict[str, str]
+
+
 class ReportEntry(TypedDict):
     """One test's evidence: an element of ``tests`` in report.json.
+
+    A test that uses pytest's ``subtests`` fixture is one entry per report pytest makes:
+    one for each ``subtests.test()`` block and one for the test itself, as pytest's own
+    summary counts them. A block's entry has the test's ``nodeid`` followed by pytest's
+    description of the block (``test_buckets [bucket-a] (region='us-east-1')``), its own
+    ``result``, and ``subtest`` naming the test; it inherits the test's accounts, standards
+    and markers. The test's own entry has ``subtest: null``, as every ordinary entry does,
+    and its result is the one pytest reports: a body that passed while a block failed is
+    ``failed`` with ``error_message`` ``contains N failed subtests``.
 
     Every key is always present, so every entry has the same columns: a value that
     does not apply is ``null`` (or an empty object), never an absent key.
@@ -223,9 +246,11 @@ class ReportEntry(TypedDict):
     collide across files.
 
     ``result: "error"`` records a test whose setup or teardown raised: a fixture
-    error before the test body ran, or a teardown failure after it passed (the
-    entry recorded at call time is upgraded, so a broken teardown can never
-    stand as passing evidence).
+    error before the test body ran, or a teardown failure after a call that passed,
+    skipped or was an expected failure (the entry recorded at call time is upgraded
+    and takes the teardown's message, so a broken teardown can never stand as
+    passing evidence or hide behind a skip; its ``reason`` is kept). After a failed
+    call the entry stays ``failed`` with the call's message.
 
     ``result: "not_run"`` records a test ``test_selection`` in cats.yaml held back: it
     requires something the deployment does not provide, or it matches an ``excluded``
@@ -238,7 +263,8 @@ class ReportEntry(TypedDict):
     - ``error_message``: the failure or error message when ``result`` is
       ``"failed"`` or ``"error"``, else ``null``.
     - ``reason``: the skip or xfail reason when ``result`` is ``"skipped"`` or
-      ``"xfailed"``, the exclusion reason when it is ``"not_run"``, else ``null``.
+      ``"xfailed"`` (kept when a teardown error turns such an entry ``"error"``), the
+      exclusion reason when it is ``"not_run"``, else ``null``.
     - ``standard_metadata``: per-standard decorator metadata keyed by standard
       name, values of the shape ``{"control_ids": list[str], "control_group":
       str | None}``; ``{}`` when the test carries no standard.
@@ -247,6 +273,8 @@ class ReportEntry(TypedDict):
     - ``duration_s``: wall-clock seconds of the phase the entry records (the
       test call, or the setup phase for a setup skip or error).
     - ``recorded_at``: the UTC time the entry was recorded, RFC 3339.
+    - ``subtest``: the block this entry records when the entry is a subtest's (see
+      SubtestDetail); ``None`` on every other entry.
     """
 
     result: ResultType
@@ -263,3 +291,4 @@ class ReportEntry(TypedDict):
     reason: str | None
     duration_s: float
     recorded_at: str
+    subtest: SubtestDetail | None

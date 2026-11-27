@@ -145,12 +145,20 @@ from cats import AccountUnderTest
 
 def test_s3_access_denied(prod_account: AccountUnderTest) -> None:
     """Prove the SCP blocks S3 public access."""
-    s3 = prod_account.role.readonly.client("s3")
+    # scp_probe's own policy allows the call, so only the SCP can deny it
+    s3 = prod_account.role.scp_probe.client("s3")
 
-    # This should fail due to SCP
-    with pytest.raises(ClientError, match="AccessDenied"):
-        s3.put_public_access_block(...)
+    with pytest.raises(ClientError, match="explicit deny in a service control policy"):
+        s3.put_public_access_block(
+            Bucket="no-such-bucket-scp-probe",
+            PublicAccessBlockConfiguration={"BlockPublicAcls": False},
+        )
 ```
+
+`scp_probe` is a role declared in `cats.yaml` whose inline policy allows the call under test,
+here `s3:PutBucketPublicAccessBlock` on `arn:aws:s3:::no-such-bucket-scp-probe` only, an ARN
+the SCP covers.
+[Prove an API Call is Denied](guides/writing-tests.md#prove-an-api-call-is-denied) shows the stanza.
 
 For network testing, CATS deploys ephemeral infrastructure (Lambdas, EC2 listeners) to prove traffic flows or is blocked.
 

@@ -279,6 +279,39 @@ as "blocked". `TIMEOUT` is the only outcome consistent with a silent DROP.
 the resolver, which is a different claim from "packets were dropped": assert it
 as `DNS_FAILURE`, not as a stand-in for `TIMEOUT`.
 
+An API denial test proves an SCP only when the role's own policy allows the action.
+Through a role that lacks it (`ReadOnlyAccess` for a write), the role's own policy
+does not allow the action, so the call is denied with or without an SCP and the
+test passes either way. Call through a role that allows exactly that action, and
+match `explicit deny in a service control policy` rather than the bare
+`AccessDenied` code. Target a name that the SCP's Resource covers but that does
+not exist, so a missing SCP fails the test instead of changing the account. Run
+it once against the real SCP to confirm the service returns the SCP message for a
+missing resource.
+
+```yaml
+global_account_settings:
+  additional_roles:
+    scp_probe:            # → myaccount_account.role.scp_probe
+      inline_policies:
+        allow-stop-logging:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: cloudtrail:StopLogging
+              Resource: arn:aws:cloudtrail:*:*:trail/no-such-trail
+```
+
+The role is deployed to every account under test: allow the action on the one resource
+the test names and nothing else, and make sure the SCP under test covers that same ARN.
+
+```python
+def test_cannot_disable_cloudtrail(myaccount_account: AccountUnderTest) -> None:
+    cloudtrail = myaccount_account.role.scp_probe.client("cloudtrail")
+    with pytest.raises(ClientError, match="explicit deny in a service control policy"):
+        cloudtrail.stop_logging(Name="no-such-trail")
+```
+
 ## Running tests
 
 ```bash
@@ -290,7 +323,10 @@ cats test --collect-only     # List tests without running
 ## Idiomatic rules
 
 - Write one assertion against a concrete expected value. No `in` checks, no
-  `startswith` — expected value, then `assert expected == actual`.
+  `startswith` — expected value, then `assert expected == actual`. The one
+  exception is a denial's cause: match `explicit deny in a service control
+  policy` with `pytest.raises(..., match=...)`, because the rest of the message
+  carries the caller's ARN.
 - Name tests `test_<condition>_<expected_outcome>`.
 - If probing via MCP or `cats run` returned something unexpected, write the
   failing test first to pin the bug, then fix.

@@ -56,7 +56,8 @@ class CatsNetworkResponse(StrEnum):
       error (ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL, ...; the errno is in reason).
       Never an expected value.
     - SENT: UDP datagram left the host (connectionless - use receive_s3 to confirm
-      arrival). REFUSED and TIMEOUT are unreachable for UDP.
+      arrival; it refuses a datagram that went without the listener's receipt token).
+      REFUSED and TIMEOUT are unreachable for UDP.
     """
 
     SUCCESS = "SUCCESS"
@@ -86,12 +87,19 @@ class CatsNetworkResult:
         reason: str(exception) from the probe for non-SUCCESS/SENT outcomes.
         http_status: The HTTP status code, only for HTTP/HTTPS SUCCESS.
         correlation_id: The UDP receipt ID that was sent or attempted, only for UDP.
+
+    `_receipt_token_carried` is internal: udp_call clears it when no receipt token was
+    registered for the host, so the datagram went without one and a CATS listener would
+    drop it. receive_s3 refuses such a result rather than read the drop as False. The
+    default is True so a SENT result built by hand for an external sender, which carries
+    the token itself, is polled as before.
     """
 
     response: CatsNetworkResponse
     reason: str | None = None
     http_status: int | None = None
     correlation_id: str | None = None
+    _receipt_token_carried: bool = True
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, CatsNetworkResult):

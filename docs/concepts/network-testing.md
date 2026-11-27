@@ -216,9 +216,11 @@ def test_udp_flow(source: AccountUnderTest, target: AccountUnderTest) -> None:
 ```
 
 `receive_s3` raises `CatsUsageError` rather than returning `False` if `sent` is not a
-UDP result, or if the datagram never left the host (`DNS_FAILURE`, `FAILURE`). A
-test asserting `receive_s3(...) is False` is claiming "dropped in flight"; a
-datagram that was never sent must not be allowed to pass that claim.
+UDP result, if the datagram never left the host (`DNS_FAILURE`, `FAILURE`), or if it
+left without the listener's receipt token (see [UDP Receipt Token](#udp-receipt-token)).
+A test asserting `receive_s3(...) is False`
+is claiming "dropped in flight"; a datagram that was never sent, or that CATS's own
+listener discarded, must not be allowed to pass that claim.
 
 ## UDP Receipt Token
 
@@ -231,9 +233,19 @@ write — a cost and abuse vector.
 This is transparent to every CATS flow: `udp_call` learns the target's token
 automatically at test time and prepends it in transport, `receive_s3` sees the
 bare correlation ID, and no test signature changes. No token is ever sent to
-non-CATS targets. Automatic tokening keys on the listener's `ec2_dns_name` —
-address UDP targets by `target.private.ec2_dns_name`, not by IP, or the
-datagram is sent bare and the listener drops it.
+non-CATS targets. Automatic tokening keys on the listener's `ec2_dns_name`, and
+the token is registered when the listener's account is constructed. So address
+UDP targets by `target.private.ec2_dns_name`, not by IP, and have the test
+request the receiving account's fixture (writing `target.private.ec2_dns_name`
+does both). A host with no registered token gets an untokened datagram: `udp_call`
+logs a WARNING and `receive_s3` refuses the result with `CatsUsageError`. A CATS
+listener drops an untokened datagram, so a missing receipt would say nothing about
+the network, and a denial test addressed by IP would otherwise pass whether or not
+the control blocked the traffic. `cats run udp-call` and `cats_udp_call` carry the
+same signal as a `receipt_token_carried` key in their output; their `receive-s3`
+runs in another process with only the ID, so the caller must not pair a `false`
+with it. The lookup is an exact string match:
+a name that differs in case or carries a trailing dot is a miss, and is refused.
 
 Be clear about what an application-layer token can and cannot do — it cannot
 close a port. The kernel receives the datagram before any CATS code runs, so a

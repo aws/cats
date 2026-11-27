@@ -258,6 +258,24 @@ aws ec2 describe-instances --filters "Name=tag:cats:managed,Values=true"
 aws ssm describe-instance-information
 ```
 
+### `ThrottlingException` on `SendCommand`: concurrent runs in one Region
+
+`botocore.errorfactory.ThrottlingException: ... SendCommand ... Rate exceeded` means the
+account's SSM request rate for the Region was exhausted. Every EC2 probe is one `SendCommand`,
+so several CATS runs in one account and Region (parallel pipelines, or `-n 10` across many
+accounts) add up fast.
+
+Every client CATS builds retries with botocore's `adaptive` mode and up to ten retries: it backs
+off, and slows its own request rate to what the service accepts, so a burst normally clears
+without a failure. A run that still fails has outlasted that. Spread concurrent runs across
+Regions, or run the suite with fewer workers (`cats test -n 4`), and if the runs are a CI fleet,
+keep the number sharing one Region to what the limit allows. The client policy takes precedence
+over `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE` and the `retry_mode` / `max_attempts` profile settings,
+which CATS's own clients do not read.
+
+The same applies to `TooManyRequestsException` from `securityhub:GetFindings` when many runs
+read findings back at once.
+
 ### UDP Test Fails
 
 **Symptom**: `receive_s3()` returns False even though `udp_call` returned `SENT`.

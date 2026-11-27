@@ -30,11 +30,12 @@ import jsonschema
 import pytest
 
 from cats.constants import CatsNetworkResponse, CatsNetworkResult
+from cats.exceptions import CatsUsageError
 from cats.report_run import ResultCounts
 from cats.resources.account_under_test import AccountUnderTest
 from tests.integration.constants import ACCOUNT_ID, REGION, skip_wrong_account
 from tests.integration.reporting_helpers import run_nested_cats_session
-from tests.integration.transport_helpers import assert_cli_transport, assert_mcp_transport
+from tests.integration.transport_helpers import assert_cli_transport, assert_mcp_transport, listener_private_ip
 from tests.utils import deploy_and_destroy
 
 ACCOUNT_KEYNAME = "ec2handler"
@@ -235,6 +236,24 @@ def test_udp_call_to_closed_port_no_receipt(deployed_ec2_stack: AccountUnderTest
     # assert
     assert sent == CatsNetworkResponse.SENT
     assert arrived is False
+
+
+@skip_wrong_account
+def test_udp_call_to_the_listener_by_ip_is_refused_by_receive_s3(deployed_ec2_stack: AccountUnderTest) -> None:
+    """The listener addressed by IP has no registered token: the datagram is SENT, the listener drops it, and
+    receive_s3 raises rather than return the False a denial test would have passed on."""
+    # arrange
+    ip = listener_private_ip(deployed_ec2_stack, "private")
+
+    # act
+    print(f"[test] ec2_udp_call to {ip}:5000 (the listener by IP)")
+    sent = deployed_ec2_stack.private.ec2_udp_call(ip, 5000)
+    print(f"[test] Sent: {sent!r}")
+
+    # assert
+    assert sent == CatsNetworkResponse.SENT
+    with pytest.raises(CatsUsageError, match="receive_s3 needs a datagram that carried the receipt token"):
+        deployed_ec2_stack.private.receive_s3(sent, timeout=1)
 
 
 @skip_wrong_account
