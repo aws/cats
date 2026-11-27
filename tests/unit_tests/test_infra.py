@@ -14,11 +14,10 @@
 
 """Tests for cats.cli.infra module - CloudFormation deployment CLI."""
 
-import threading
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from botocore.exceptions import ClientError, ParamValidationError
@@ -1032,28 +1031,26 @@ def test_status_reads_accounts_concurrently_and_keeps_argument_order(
     mocker: MockerFixture,
     cli_runner: CliRunner,
 ) -> None:
-    """status assumes a role and describes a stack per account; ten accounts in series is the speed goal's enemy."""
+    """status hands every account to a thread pool's map, in argument order; ten accounts in series is the speed goal's enemy."""
     # arrange
     accounts = {f"acct{i}": "111111111111" for i in range(1, 5)}
     write_config(cats_yaml, make_config(accounts=accounts, allow_deploy_to_current_account=True))
     mocker.patch("cats.cli.infra.__version__", "1.0.0")
-    threads_seen: set[str] = set()
-
-    def describe_stacks(**kwargs: object) -> dict[str, object]:
-        threads_seen.add(threading.current_thread().name)
-        return {"Stacks": [{"StackStatus": "CREATE_COMPLETE", "Tags": make_stack_tags("1.0.0")}]}
-
     mock_cfn = MagicMock()
-    mock_cfn.describe_stacks.side_effect = describe_stacks
+    mock_cfn.describe_stacks.return_value = {"Stacks": [{"StackStatus": "CREATE_COMPLETE", "Tags": make_stack_tags("1.0.0")}]}
     mocker.patch("boto3.Session.client", return_value=mock_cfn)
+    pool = mocker.patch.object(infra_module, "ThreadPoolExecutor")
+    executor = pool.return_value.__enter__.return_value
+    executor.map.side_effect = map  # the pool's map, run in this thread: same results, same order, no scheduling
 
     # act
     result = cli_runner.invoke(cats_cli, ["infra", "status", "acct3", "acct1", "acct4", "acct2"])
 
     # assert
     rows = [line.split()[1] for line in result.stdout.splitlines() if line.startswith("│ acct")]
-    expected = (0, ["acct3", "acct1", "acct4", "acct2"], True)
-    assert (result.exit_code, rows, len(threads_seen) > 1) == expected
+    mapped_names = [list(map_call.args[1]) for map_call in executor.map.call_args_list]
+    expected = (0, call(max_workers=10), [["acct3", "acct1", "acct4", "acct2"]], ["acct3", "acct1", "acct4", "acct2"])
+    assert (result.exit_code, pool.call_args, mapped_names, rows) == expected
 
 
 @pytest.mark.parametrize(
